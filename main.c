@@ -17,8 +17,10 @@ Todo:
 - Alterar MOVE_TO para ser uma request para View
 - Correção e padronização do Uso da mensagem
 - Elaboração da matriz de visualização final (Com ascii e infos)
-- Criação de Passageiros
+- Criação de Passageiros em loc random
 - Synch All
+
+Outras coisas que ainda nn consideramos
 */
 
 
@@ -76,6 +78,8 @@ void* taxi_thread(void* arg) {
 typedef struct {
     Taxi* taxis;
     int numTaxis;
+    Passenger* passengers;
+    int numPassengers;
     MessageQueue queue;
     MessageQueue view_queue;
     pthread_mutex_t lock;
@@ -106,6 +110,36 @@ void assign_taxi_to_passenger(ControlCenter* center, int taxi_id, int passenger_
 
     free(msg);
 }
+
+// Implementar geração automática aqui no x, y
+void create_passenger(ControlCenter* center, int x, int y) {
+    pthread_mutex_lock(&center->lock);
+
+    // Allocate memory for the new passenger
+    center->passengers = realloc(center->passengers, (center->numPassengers + 1) * sizeof(Passenger));
+    center->passengers[center->numPassengers].id = center->numPassengers + 1;
+    center->passengers[center->numPassengers].x = x;
+    center->passengers[center->numPassengers].y = y;
+    center->passengers[center->numPassengers].status = WAITING;
+
+    center->numPassengers++;
+
+    pthread_mutex_unlock(&center->lock);
+}
+
+// ---------- DEFINIÇÕES PASSAGEIROS -----------------------------------
+
+typedef enum {
+    WAITING,
+    ASSIGNED,
+    IN_RIDE
+} PassengerState;
+
+typedef struct {
+    int id;
+    int x, y;
+    PassengerState state;
+} Passenger;
 
 
 // ---------- DEFINIÇÕES DA FILA DE COMANDOS COMPARTILHADA --------------
