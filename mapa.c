@@ -43,7 +43,7 @@ int encontraCaminhoMatriz(char **mapa, int largura, int altura, int x_inicio, in
     mapa_copia[x_dest][y_dest] = 'S';
     
     // Encontrando o caminho
-    if(encontraCaminho(x_inicio, y_inicio, mapa_copia, largura, altura) == 0) {
+    if(encontraCaminho(x_inicio, y_inicio, mapa_copia, largura, altura, solucaoX, solucaoY, tamanho_solucao) == 0) {
 
         // Se não encontrou caminho, libera a memória e retorna 0
         desalocarMapa(mapa_copia);
@@ -57,7 +57,7 @@ int encontraCaminhoMatriz(char **mapa, int largura, int altura, int x_inicio, in
 
 
 
-int encontraCaminho(int x_atual, int y_atual, char **maze, int largura, int altura) {
+int encontraCaminho(int x_atual, int y_atual, char **maze, int largura, int altura, int solucaoX[], int solucaoY[], int *tamanho_solucao) {
     // Se tentou sair do labirinto, este não é o caminho certo.
     if (x_atual < 0 || x_atual >= largura || y_atual < 0 || y_atual >= altura) return 0;
 
@@ -73,21 +73,36 @@ int encontraCaminho(int x_atual, int y_atual, char **maze, int largura, int altu
 
     // Tenta ir para cima.
     maze[x_atual][y_atual] = '^';
-    if (encontraCaminho(x_atual, y_atual + 1, maze, largura, altura)) return 1;
+    solucaoX[*tamanho_solucao] = x_atual;
+    solucaoY[*tamanho_solucao] = y_atual;
+    (*tamanho_solucao)++;
+    if (encontraCaminho(x_atual, y_atual + 1, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
 
     // Tenta ir para baixo.
     maze[x_atual][y_atual] = 'v';
-    if (encontraCaminho(x_atual, y_atual - 1, maze, largura, altura)) return 1;
+    solucaoX[*tamanho_solucao] = x_atual;
+    solucaoY[*tamanho_solucao] = y_atual;
+    (*tamanho_solucao)++;
+    if (encontraCaminho(x_atual, y_atual - 1, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
 
     // Tenta ir para a esquerda.
     maze[x_atual][y_atual] = '<';
-    if (encontraCaminho(x_atual - 1, y_atual, maze, largura, altura)) return 1;
+    solucaoX[*tamanho_solucao] = x_atual;
+    solucaoY[*tamanho_solucao] = y_atual;
+    (*tamanho_solucao)++;
+    if (encontraCaminho(x_atual - 1, y_atual, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
 
     // Tenta ir para a direita.
     maze[x_atual][y_atual] = '>';
-    if (encontraCaminho(x_atual + 1, y_atual, maze, largura, altura)) return 1;
+    solucaoX[*tamanho_solucao] = x_atual;
+    solucaoY[*tamanho_solucao] = y_atual;
+    (*tamanho_solucao)++;
+    if (encontraCaminho(x_atual + 1, y_atual, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
 
     // Não deu, então volta.
+    solucaoX[*tamanho_solucao] = '0';
+    solucaoY[*tamanho_solucao] = '0';
+    (*tamanho_solucao)--;
     maze[x_atual][y_atual] = 'O';   
     return 0;
 }
