@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "mapa.h"
 
+
 /*
 Decidimos para esse projeto simular uma fila de instruções de cada thread para fins didáticos,
 Cada entidade terá sua estrutura que será utilizada para a comunicação entre threads.
@@ -27,6 +28,44 @@ Outras coisas que ainda nn consideramos
 
 //-------------------- ENTIDADES PRINCIPAIS ------------------------ 
 
+// ---------- DEFINIÇÕES DA FILA DE COMANDOS COMPARTILHADA --------------
+
+typedef enum {
+    STATUS_REQUEST,   
+    STATUS_UPDATE,    
+    START_ROUTE,      
+    MOVE_TO,          
+    ACKNOWLEDGE,
+    PATHFIND_REQUEST,
+    PATHFIND_RESPONSE,
+    EXIT       
+} MessageType;
+
+// Node
+typedef struct Message {
+    MessageType type;
+    int sender_id;   
+    int target_id;   
+    int data_x;      
+    int data_y;
+    int extra_x;     
+    int extra_y;
+    int* pathX;
+    int* pathY;
+    int pathLen;
+    struct Message* next;
+} Message;
+
+// ---------- DEFINIÇÕES DA FILA DE COMANDOS COMPARTILHADA --------------
+
+// Fila
+typedef struct {
+    Message* head;
+    Message* tail;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+} MessageQueue;
+
 // ----------- DEFINIÇÕES DO TAXI -------------------
 
 // Definição dos Taxis
@@ -49,9 +88,23 @@ typedef struct {
     int minTamanho;
     int maxTamanho;
     int distanciaMinima;
-    MessageQueue view_queue;
+    ControlCenter* center; // Added field for ControlCenter
+    MessageQueue queue;
     pthread_mutex_t lock; 
 } InitVisualizer;
+
+// ----------- DEFINIÇÕES DO CENTRO DE CONTROLE -------------------------
+
+typedef struct {
+    Taxi* taxis;
+    int numTaxis;
+    Passenger* passengers;
+    int numPassengers;
+    MessageQueue queue;
+    MessageQueue view_queue;
+    pthread_mutex_t lock;
+} ControlCenter;
+
 
 void* visualizador_thread(void* arg) {
 
@@ -65,27 +118,43 @@ void* visualizador_thread(void* arg) {
     gerarMapa(mapa, center->numQuadrados, center->larguraRua, center->larguraBorda, center->minTamanho, center->maxTamanho, center->distanciaMinima);
 
     while (1) {
-        Message* msg = dequeue_message(&center->view_queue);
+        Message* msg = dequeue_message(&center->queue);
         
         pthread_mutex_lock(&center->lock);
-
-        int path_x[] = {0}, path_y[]={0}, path_Len = 0;
         
         switch (msg->type) {
             case PATHFIND_REQUEST:
 
+            int max_path = mapa->linhas * mapa->colunas;
+            int* path_x = malloc(sizeof(int) * max_path);
+            int* path_y = malloc(sizeof(int) * max_path);
+            int path_len = 0;
+
             // Implementar algoritmo de busca de caminho
-            encontraCaminhoMatriz(mapa, mapa->linhas, mapa->colunas, msg->data_x, msg->data_y, msg->extra_x, msg->extra_y, path_x, path_y, path_Len);
+            if(encontraCaminhoMapa(mapa, msg->data_x, msg->data_y, msg->extra_x, msg->extra_y, path_x, path_y, path_len)){
+
+                // Enviar PATHFIND_RESPONSE com a rota
+                enqueue_message(&center->center->queue, PATHFIND_RESPONSE, msg->target_id, msg->sender_id, 0, 0, 0, 0, path_x, path_y, path_len);
             
-            // Enviar PATHFIND_RESPONSE com a rota
-            enqueue_message(center->view_queue, PATHFIND_RESPONSE, msg->target_id, msg->sender_id, 0, 0, 0, 0, path_x, path_y, path_Len);
+            }else{
+
+                enqueue_message(&center->center->queue, PATHFIND_RESPONSE, msg->target_id, msg->sender_id, 0, 0, 0, 0, NULL, NULL, NULL);
+                free(path_y);  
+                free(path_x);  
+            }
+            break;
+
+        }
+        
+        if(msg->type == EXIT) {
+            pthread_mutex_unlock(&center->lock);
+            free(msg);
             break;
         }
 
-
-        
         pthread_mutex_unlock(&center->lock);
         free(msg);
+
     }
 
     // Libera a memória
@@ -127,17 +196,6 @@ void* taxi_thread(void* arg) {
 }
 
 
-// ----------- DEFINIÇÕES DO CENTRO DE CONTROLE -------------------------
-
-typedef struct {
-    Taxi* taxis;
-    int numTaxis;
-    Passenger* passengers;
-    int numPassengers;
-    MessageQueue queue;
-    MessageQueue view_queue;
-    pthread_mutex_t lock;
-} ControlCenter;
 
 
 void assign_taxi_to_passenger(ControlCenter* center, int taxi_id, int passenger_x, int passenger_y) {
@@ -148,11 +206,11 @@ void assign_taxi_to_passenger(ControlCenter* center, int taxi_id, int passenger_
 
     // Wait for the PATHFIND_RESPONSE with the route
     Message* msg = dequeue_message(&center->view_queue);
-    if (msg->type == PATHFIND_RESPONSE) {
+    if (msg->type == PATHFIND_RESPONSE && msg->pathX != NULL) {
 
-        int* route_x = msg->extra_x;  
-        int* route_y = msg->extra_y;  
-        int route_length = msg->extra_x;  
+        int* route_x = msg->pathX;  
+        int* route_y = msg->pathY;  
+        int route_length = msg->pathLen;  
 
         for (int i = 0; i < route_length; i++) {
             enqueue_message(&taxi->queue, MOVE_TO, 0, taxi_id, 0, 0, route_x[i], route_y[i],0,0,0);
@@ -161,6 +219,8 @@ void assign_taxi_to_passenger(ControlCenter* center, int taxi_id, int passenger_
 
         printf("Taxi %d assigned route to passenger location (%d, %d)\n", taxi_id, passenger_x, passenger_y);
     }
+
+    
 
     free(msg);
 }
@@ -194,42 +254,6 @@ typedef struct {
     int x, y;
     PassengerState state;
 } Passenger;
-
-
-// ---------- DEFINIÇÕES DA FILA DE COMANDOS COMPARTILHADA --------------
-
-typedef enum {
-    STATUS_REQUEST,   
-    STATUS_UPDATE,    
-    START_ROUTE,      
-    MOVE_TO,          
-    ACKNOWLEDGE,
-    PATHFIND_REQUEST,
-    PATHFIND_RESPONSE       
-} MessageType;
-
-// Node
-typedef struct Message {
-    MessageType type;
-    int sender_id;   
-    int target_id;   
-    int data_x;      
-    int data_y;
-    int extra_x;     
-    int extra_y;
-    int* pathX;
-    int* pathY;
-    int pathLen;
-    struct Message* next;
-} Message;
-
-// Fila
-typedef struct {
-    Message* head;
-    Message* tail;
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
-} MessageQueue;
 
 void init_queue(MessageQueue* queue) {
     queue->head = NULL;
@@ -284,7 +308,8 @@ Message* dequeue_message(MessageQueue* queue) {
 /*
 Readaptar função para receber mapa de jogo, e as posições iniciais dos taxis serem ruas
 */
-// Função de inicialização, cria centro de controle e taxis
+// Função de inicialização, cria centro de controle e taxis 
+//(precisa inicializar o vizualizador aqui ja com os parametros de entrada do mapa)
 void init_operations(ControlCenter* center, int numTaxis) {
     center->numTaxis = numTaxis;
     center->taxis = malloc(numTaxis * sizeof(Taxi));
@@ -293,6 +318,21 @@ void init_operations(ControlCenter* center, int numTaxis) {
     // Initialize the message queues
     init_queue(&center->queue);      // Control Center's queue
     init_queue(&center->view_queue); // Queue for View communication
+    
+    InitVisualizer* initVisualizer = malloc(sizeof(InitVisualizer));
+    initVisualizer->center = center;
+    pthread_t visualizador_thread_id;
+
+    initVisualizer->numQuadrados = 15;
+    initVisualizer->larguraRua = 2;
+    initVisualizer->larguraBorda = 2;
+    initVisualizer->minTamanho = 10;
+    initVisualizer->maxTamanho = 12;
+    initVisualizer->distanciaMinima = 8;
+
+    pthread_create(&visualizador_thread_id, NULL, visualizador_thread, initVisualizer);
+
+
 
     pthread_t taxiThreads[numTaxis];
 

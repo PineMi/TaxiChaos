@@ -8,104 +8,102 @@
 #include <limits.h>
 #include <stdbool.h>
 
-#define RUA 0
-#define CALCADA 1
+//DEFINIÇÕES DA MATRIZ 
+#define CAMINHO_LIVRE '0'
+#define ORIGEM 'E'
+#define DESTINO 'S'
+#define VISITADO '-'
+#define RUA '0'
+#define CALCADA '1'
+
+#define DIREITA '>'   // Leste (→)
+#define ESQUERDA '<'  // Oeste (←)
+#define CIMA '^'      // Norte (↑)
+#define BAIXO 'v'     // Sul (↓)
 
 typedef struct {
     int x, y;
     int tamanho;
 } Quadrado;
 
-struct Mapa {
-    int** matriz;
-    int linhas;
-    int colunas;
-    int largura_rua;
-};
+int encontraCaminho(int x_atual, int y_atual, char **maze, int largura, int altura, int solucaoX[], int solucaoY[], int *tamanho_solucao) {
 
-int encontraCaminhoMatriz(char **mapa, int largura, int altura, int x_inicio, int y_inicio ,int x_dest, int y_dest, int solucaoX[], int solucaoY[], int *tamanho_solucao) {
-    // Se tentou sair do labirinto, este não é o caminho certo.
-    if (x_inicio < 0 || x_inicio >= largura || y_inicio < 0 || y_inicio >= altura) return 1;
-
-    // Alocando memória para as matrizes
-    int** mapa_copia = malloc(altura * sizeof(int*));
-
-    for (int i = 0; i < altura; i++) {
-        mapa_copia[i] = malloc(largura * sizeof(int));
+    // Verifica se está fora dos limites.
+    if (x_atual < 0 || x_atual >= largura || y_atual < 0 || y_atual >= altura) {
+        return 1;
     }
-
-    // Copiando os dados da matriz original para a matriz_copia
-    for (int i = 0; i < altura; i++) {
-        memcpy(mapa_copia[i], mapa[i], largura * sizeof(int));
-    }
-
-    mapa_copia[x_inicio][y_inicio] = 'E';
-    mapa_copia[x_dest][y_dest] = 'S';
     
-    // Encontrando o caminho
-    if(encontraCaminho(x_inicio, y_inicio, mapa_copia, largura, altura, solucaoX, solucaoY, tamanho_solucao) == 0) {
+    char aqui = maze[y_atual][x_atual];
+    
+    // Verifica se achou a saída.
+    if (aqui == DESTINO) {
+        solucaoX[*tamanho_solucao] = x_atual;
+        solucaoY[*tamanho_solucao] = y_atual;
+        (*tamanho_solucao)++;
+        return 0;
+    }
 
-        // Se não encontrou caminho, libera a memória e retorna 0
-        desalocarMapa(mapa_copia);
+    // Se NÃO for ORIGEM e NÃO for CAMINHO_LIVRE, retorna falha.
+    if (aqui != ORIGEM && aqui != CAMINHO_LIVRE) {
         return 1;
     }
 
-    desalocarMapa(mapa_copia);
-    return 0;
+    // Marca como visitado (exceto ORIGEM).
+    if (aqui != ORIGEM) {
+        maze[y_atual][x_atual] = VISITADO;
+    }
 
-}
-
-
-
-int encontraCaminho(int x_atual, int y_atual, char **maze, int largura, int altura, int solucaoX[], int solucaoY[], int *tamanho_solucao) {
-    // Se tentou sair do labirinto, este não é o caminho certo.
-    if (x_atual < 0 || x_atual >= largura || y_atual < 0 || y_atual >= altura) return 0;
-
-    char aqui = maze[x_atual][y_atual];
-
-    // Verifica se achou a saída.
-
-    if (aqui == 'S') return 1;
-
-    // Se bateu na parede ou voltou para algum lugar que já esteve,
-    // então este não é o caminho certo.
-    if (aqui == 'X' || aqui == '>' || aqui == '<' || aqui == 'v' || aqui == '^') return 0;
-
-    // Tenta ir para cima.
-    maze[x_atual][y_atual] = '^';
+    // Adiciona a posição atual ao caminho.
     solucaoX[*tamanho_solucao] = x_atual;
     solucaoY[*tamanho_solucao] = y_atual;
     (*tamanho_solucao)++;
-    if (encontraCaminho(x_atual, y_atual + 1, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
 
-    // Tenta ir para baixo.
-    maze[x_atual][y_atual] = 'v';
-    solucaoX[*tamanho_solucao] = x_atual;
-    solucaoY[*tamanho_solucao] = y_atual;
-    (*tamanho_solucao)++;
-    if (encontraCaminho(x_atual, y_atual - 1, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
+    // Tenta todas as direções.
+    if (encontraCaminho(x_atual, y_atual + 1, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao) == 0) {  // Cima
+        return 0;
+    }
+    if (encontraCaminho(x_atual, y_atual - 1, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao) == 0) {  // Baixo
+        return 0;
+    }
+    if (encontraCaminho(x_atual - 1, y_atual, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao) == 0) {  // Esquerda
+        return 0;
+    }
+    if (encontraCaminho(x_atual + 1, y_atual, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao) == 0) {  // Direita
+        return 0;
+    }
 
-    // Tenta ir para a esquerda.
-    maze[x_atual][y_atual] = '<';
-    solucaoX[*tamanho_solucao] = x_atual;
-    solucaoY[*tamanho_solucao] = y_atual;
-    (*tamanho_solucao)++;
-    if (encontraCaminho(x_atual - 1, y_atual, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
-
-    // Tenta ir para a direita.
-    maze[x_atual][y_atual] = '>';
-    solucaoX[*tamanho_solucao] = x_atual;
-    solucaoY[*tamanho_solucao] = y_atual;
-    (*tamanho_solucao)++;
-    if (encontraCaminho(x_atual + 1, y_atual, maze, largura, altura, solucaoX, solucaoY, tamanho_solucao)) return 1;
-
-    // Não deu, então volta.
-    solucaoX[*tamanho_solucao] = '0';
-    solucaoY[*tamanho_solucao] = '0';
+    // Se nenhuma direção funcionou, faz backtracking.
     (*tamanho_solucao)--;
-    maze[x_atual][y_atual] = 'O';   
-    return 0;
+    if (aqui != ORIGEM) {
+      //  maze[y_atual][x_atual] = CAMINHO_LIVRE;
+    }
+    return 1;
 }
+
+void marcarCaminho(char **maze, int solucaoX[], int solucaoY[], int tamanho_solucao) {
+    for (int i = 0; i < tamanho_solucao - 1; i++) {
+        int x_atual = solucaoX[i];
+        int y_atual = solucaoY[i];
+        int x_prox = solucaoX[i + 1];
+        int y_prox = solucaoY[i + 1];
+        
+        // Determina a direção para a próxima posição
+        if (x_prox == x_atual + 1 && y_prox == y_atual) {
+            maze[y_atual][x_atual] = DIREITA;  // →
+        } else if (x_prox == x_atual - 1 && y_prox == y_atual) {
+            maze[y_atual][x_atual] = ESQUERDA; // ←
+        } else if (y_prox == y_atual + 1 && x_prox == x_atual) {
+            maze[y_atual][x_atual] = BAIXO;    // ↓
+        } else if (y_prox == y_atual - 1 && x_prox == x_atual) {
+            maze[y_atual][x_atual] = CIMA;      // ↑
+        }
+    }
+    
+    // Mantém o destino original
+    maze[solucaoY[tamanho_solucao-1]][solucaoX[tamanho_solucao-1]] = DESTINO;
+}
+
+
 
 // Funções auxiliares estáticas (visíveis apenas neste arquivo)
 static void desenharQuadrado(Mapa* mapa, Quadrado q, int largura_borda) {
@@ -219,7 +217,7 @@ static void conectarQuadradosMST(Mapa* mapa, Quadrado* quadrados, int num_quadra
 
     key[0] = 0;
     parent[0] = -1;
-
+    
     for (int count = 0; count < num_quadrados - 1; count++) {
         int min_key = INT_MAX, min_index;
         for (int v = 0; v < num_quadrados; v++) {
@@ -244,7 +242,7 @@ static void conectarQuadradosMST(Mapa* mapa, Quadrado* quadrados, int num_quadra
             }
         }
     }
-
+    
     for (int i = 1; i < num_quadrados; i++) {
         int px1, py1, px2, py2;
         encontrarPontosConexao(quadrados[parent[i]], quadrados[i], &px1, &py1, &px2, &py2);
@@ -269,15 +267,50 @@ Mapa* criarMapa() {
     mapa->colunas = ws.ws_col;
     mapa->largura_rua = 1; // Valor padrão
 
-    mapa->matriz = malloc(mapa->linhas * sizeof(int*));
+    mapa->matriz = malloc(mapa->linhas * sizeof(char*));
     for (int i = 0; i < mapa->linhas; i++) {
-        mapa->matriz[i] = malloc(mapa->colunas * sizeof(int));
+        mapa->matriz[i] = malloc(mapa->colunas * sizeof(char));
         for (int j = 0; j < mapa->colunas; j++) {
             mapa->matriz[i][j] = CALCADA;
         }
     }
-
+    
     return mapa;
+}
+
+int encontraCaminhoMapa(Mapa *mapa, int x_inicio, int y_inicio ,int x_dest, int y_dest, int solucaoX[], int solucaoY[], int *tamanho_solucao) {
+    
+    int altura = mapa->linhas, largura = mapa->colunas;
+    
+    // Se tentou sair do labirinto, este não é o caminho certo.
+    if (x_inicio < 0 || x_inicio >= largura || y_inicio < 0 || y_inicio >= altura || x_dest < 0 || x_dest >= largura || y_dest < 0 || y_dest >= altura) return 1; // fora do mapa
+    
+    
+    // Cria cópia da matriz
+    char** matriz_copia = malloc(mapa->linhas * sizeof(char*));
+    for (int i = 0; i < mapa->linhas; i++) {
+        matriz_copia[i] = malloc(mapa->colunas * sizeof(char));
+        memcpy(matriz_copia[i], mapa->matriz[i], mapa->colunas);
+    }
+    
+    
+    //Insere os dados do no mapa_copia
+    Mapa* mapa_copia = malloc(sizeof(Mapa));
+    mapa_copia->matriz = matriz_copia;
+    mapa_copia->linhas = altura;
+    mapa_copia->colunas = largura;
+    mapa_copia->largura_rua = mapa->largura_rua;
+    
+    
+    mapa_copia->matriz[y_inicio][x_inicio] = ORIGEM;
+    mapa_copia->matriz[y_dest][x_dest] = DESTINO;
+
+    // Encontrando o caminho
+    int resultado = encontraCaminho(x_inicio, y_inicio, mapa_copia->matriz, largura, altura, solucaoX, solucaoY, tamanho_solucao);
+
+    desalocarMapa(mapa_copia);
+
+    return resultado;
 }
 
 void gerarMapa(Mapa* mapa, int num_quadrados, int largura_rua, int largura_borda, int min_tamanho, int max_tamanho, int distancia_minima) {
@@ -317,16 +350,18 @@ void gerarMapa(Mapa* mapa, int num_quadrados, int largura_rua, int largura_borda
 void imprimirMapa(Mapa* mapa) {
     for (int i = 0; i < mapa->linhas; i++) {
         for (int j = 0; j < mapa->colunas; j++) {
-            printf("%d", mapa->matriz[i][j]);
+            printf("%c", mapa->matriz[i][j]);
         }
         printf("\n");
     }
 }
 
 void desalocarMapa(Mapa* mapa) {
-    for (int i = 0; i < mapa->linhas; i++) {
+    if(!mapa) return;
+
+    for (int i = 0; i < mapa->linhas; i++) 
         free(mapa->matriz[i]);
-    }
+
     free(mapa->matriz);
     free(mapa);
 }
