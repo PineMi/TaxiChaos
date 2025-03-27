@@ -163,6 +163,9 @@ typedef struct Message {
     int data_y;
     int extra_x;     
     int extra_y;
+    int pathX[];
+    int pathY[];
+    int pathLen;
     struct Message* next;
 } Message;
 

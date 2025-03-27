@@ -23,6 +23,49 @@ struct Mapa {
     int largura_rua;
 };
 
+int encontraCaminhoMatriz(int x_atual, int y_atual, char **maze, int largura, int altura, int x_dest, int y_dest){
+
+    memcpy();
+
+}
+
+
+
+int encontraCaminho(int x_atual, int y_atual, char **maze, int largura, int altura) {
+    // Se tentou sair do labirinto, este não é o caminho certo.
+    if (x_atual < 0 || x_atual >= largura || y_atual < 0 || y_atual >= altura) return 0;
+
+    char aqui = maze[x_atual][y_atual];
+
+    // Verifica se achou a saída.
+
+    if (aqui == 'S') return 1;
+
+    // Se bateu na parede ou voltou para algum lugar que já esteve,
+    // então este não é o caminho certo.
+    if (aqui == 'X' || aqui == '>' || aqui == '<' || aqui == 'v' || aqui == '^') return 0;
+
+    // Tenta ir para cima.
+    maze[x_atual][y_atual] = '^';
+    if (encontraCaminho(x_atual, y_atual + 1, maze, largura, altura)) return 1;
+
+    // Tenta ir para baixo.
+    maze[x_atual][y_atual] = 'v';
+    if (encontraCaminho(x_atual, y_atual - 1, maze, largura, altura)) return 1;
+
+    // Tenta ir para a esquerda.
+    maze[x_atual][y_atual] = '<';
+    if (encontraCaminho(x_atual - 1, y_atual, maze, largura, altura)) return 1;
+
+    // Tenta ir para a direita.
+    maze[x_atual][y_atual] = '>';
+    if (encontraCaminho(x_atual + 1, y_atual, maze, largura, altura)) return 1;
+
+    // Não deu, então volta.
+    maze[x_atual][y_atual] = 'O';   
+    return 0;
+}
+
 // Funções auxiliares estáticas (visíveis apenas neste arquivo)
 static void desenharQuadrado(Mapa* mapa, Quadrado q, int largura_borda) {
     // Topo
