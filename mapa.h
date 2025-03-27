@@ -4,7 +4,12 @@
 #include <stdbool.h>
 
 // Estrutura opaca que representa o mapa
-typedef struct Mapa Mapa;
+typedef struct Mapa {
+    int** matriz;
+    int linhas;
+    int colunas;
+    int largura_rua;
+} Mapa;
 
 // Cria um novo mapa do tamanho do terminal
 Mapa* criarMapa();

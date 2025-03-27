@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include "mapa.h"
 
 /*
 Decidimos para esse projeto simular uma fila de instruções de cada thread para fins didáticos,
@@ -40,6 +41,59 @@ typedef struct {
 } Taxi;
 
 
+// ----------- DEFINIÇÕES DO VISUALIZADOR -------------------------
+typedef struct {
+    int numQuadrados;
+    int larguraRua;
+    int larguraBorda;
+    int minTamanho;
+    int maxTamanho;
+    int distanciaMinima;
+    MessageQueue view_queue;
+    pthread_mutex_t lock; 
+} InitVisualizer;
+
+void* visualizador_thread(void* arg) {
+
+    InitVisualizer* center = (InitVisualizer*)arg;
+
+    // Cria o mapa
+    Mapa* mapa = criarMapa();
+    if (!mapa) return 1;
+
+    // Gera o mapa com os paremetros enviados pelo Control Center
+    gerarMapa(mapa, center->numQuadrados, center->larguraRua, center->larguraBorda, center->minTamanho, center->maxTamanho, center->distanciaMinima);
+
+    while (1) {
+        Message* msg = dequeue_message(&center->view_queue);
+        
+        pthread_mutex_lock(&center->lock);
+
+        int path_x[] = {0}, path_y[]={0}, path_Len = 0;
+        
+        switch (msg->type) {
+            case PATHFIND_REQUEST:
+
+            // Implementar algoritmo de busca de caminho
+            encontraCaminhoMatriz(mapa, mapa->linhas, mapa->colunas, msg->data_x, msg->data_y, msg->extra_x, msg->extra_y, path_x, path_y, path_Len);
+            
+            // Enviar PATHFIND_RESPONSE com a rota
+            enqueue_message(center->view_queue, PATHFIND_RESPONSE, msg->target_id, msg->sender_id, 0, 0, 0, 0, path_x, path_y, path_Len);
+            break;
+        }
+
+
+        
+        pthread_mutex_unlock(&center->lock);
+        free(msg);
+    }
+
+    // Libera a memória
+    desalocarMapa(mapa);
+
+}
+
+
 void* taxi_thread(void* arg) {
     Taxi* taxi = (Taxi*)arg; 
 
@@ -50,7 +104,7 @@ void* taxi_thread(void* arg) {
         
         switch (msg->type) {
             case STATUS_REQUEST:
-                enqueue_message(taxi->control_center->queue, STATUS_UPDATE, taxi->id, 0, taxi->x, taxi->y, taxi->isFree, 0);
+                enqueue_message(taxi->control_center->queue, STATUS_UPDATE, taxi->id, 0, taxi->x, taxi->y, taxi->isFree, 0,0,0,0);
                 break;
 
             case START_ROUTE:
@@ -90,7 +144,7 @@ void assign_taxi_to_passenger(ControlCenter* center, int taxi_id, int passenger_
     Taxi* taxi = &center->taxis[taxi_id];
 
     // Send a PATHFIND_REQUEST message to the View Queue
-    enqueue_message(&center->view_queue, PATHFIND_REQUEST, taxi->x, taxi->y, passenger_x, passenger_y, 0, 0);
+    enqueue_message(&center->view_queue, PATHFIND_REQUEST, taxi->x, taxi->y, passenger_x, passenger_y, 0, 0,0,0,0);
 
     // Wait for the PATHFIND_RESPONSE with the route
     Message* msg = dequeue_message(&center->view_queue);
@@ -101,7 +155,7 @@ void assign_taxi_to_passenger(ControlCenter* center, int taxi_id, int passenger_
         int route_length = msg->extra_x;  
 
         for (int i = 0; i < route_length; i++) {
-            enqueue_message(&taxi->queue, MOVE_TO, 0, taxi_id, 0, 0, route_x[i], route_y[i]);
+            enqueue_message(&taxi->queue, MOVE_TO, 0, taxi_id, 0, 0, route_x[i], route_y[i],0,0,0);
             sleep(1);
         }
 
@@ -163,8 +217,8 @@ typedef struct Message {
     int data_y;
     int extra_x;     
     int extra_y;
-    int pathX[];
-    int pathY[];
+    int* pathX;
+    int* pathY;
     int pathLen;
     struct Message* next;
 } Message;
@@ -185,7 +239,7 @@ void init_queue(MessageQueue* queue) {
 }
 
 // Funções de fila: enqueue / dequeue
-void enqueue_message(MessageQueue* queue, MessageType type, int sender_id, int target_id, int x, int y, int extra_x, int extra_y) {
+void enqueue_message(MessageQueue* queue, MessageType type, int sender_id, int target_id, int x, int y, int extra_x, int extra_y, int* pathX, int* pathY, int pathLen) {
     Message* new_msg = malloc(sizeof(Message));
     new_msg->type = type;
     new_msg->sender_id = sender_id;
@@ -195,6 +249,9 @@ void enqueue_message(MessageQueue* queue, MessageType type, int sender_id, int t
     new_msg->extra_x = extra_x;
     new_msg->extra_y = extra_y;
     new_msg->next = NULL;
+    new_msg->pathX = pathX;
+    new_msg->pathY = pathY;
+    new_msg->pathLen = pathLen;
 
     pthread_mutex_lock(&queue->lock);
     if (queue->tail == NULL) {

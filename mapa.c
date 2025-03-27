@@ -23,9 +23,35 @@ struct Mapa {
     int largura_rua;
 };
 
-int encontraCaminhoMatriz(int x_atual, int y_atual, char **maze, int largura, int altura, int x_dest, int y_dest){
+int encontraCaminhoMatriz(char **mapa, int largura, int altura, int x_inicio, int y_inicio ,int x_dest, int y_dest, int solucaoX[], int solucaoY[], int *tamanho_solucao) {
+    // Se tentou sair do labirinto, este não é o caminho certo.
+    if (x_inicio < 0 || x_inicio >= largura || y_inicio < 0 || y_inicio >= altura) return 1;
 
-    memcpy();
+    // Alocando memória para as matrizes
+    int** mapa_copia = malloc(altura * sizeof(int*));
+
+    for (int i = 0; i < altura; i++) {
+        mapa_copia[i] = malloc(largura * sizeof(int));
+    }
+
+    // Copiando os dados da matriz original para a matriz_copia
+    for (int i = 0; i < altura; i++) {
+        memcpy(mapa_copia[i], mapa[i], largura * sizeof(int));
+    }
+
+    mapa_copia[x_inicio][y_inicio] = 'E';
+    mapa_copia[x_dest][y_dest] = 'S';
+    
+    // Encontrando o caminho
+    if(encontraCaminho(x_inicio, y_inicio, mapa_copia, largura, altura) == 0) {
+
+        // Se não encontrou caminho, libera a memória e retorna 0
+        desalocarMapa(mapa_copia);
+        return 1;
+    }
+
+    desalocarMapa(mapa_copia);
+    return 0;
 
 }
 
