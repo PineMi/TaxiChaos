@@ -6,8 +6,18 @@ int main() {
     Mapa* mapa = criarMapa();
     if (!mapa) return 1;
     
+    int numero_Quadrados = 60;
+    int Largura_rua = 1;
+    int Largura_Borda = 1;
+    int minimo_tamanho = 6;
+    int maximo_tamanho = 8;
+    int Distancia_minima = maximo_tamanho;
+    
+
+
+
     // Gera o mapa com 6 quarteirões e ruas de largura 3
-    gerarMapa(mapa, 15, 2, 2, 10, 12, 8);
+    gerarMapa(mapa, numero_Quadrados, Largura_rua, Largura_Borda, minimo_tamanho, maximo_tamanho, Distancia_minima);
     
     // Imprime o mapa
     imprimirMapa(mapa);
