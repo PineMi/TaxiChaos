@@ -6,11 +6,11 @@ int main() {
     Mapa* mapa = criarMapa();
     if (!mapa) return 1;
     
-    int numero_Quadrados = 60;
-    int Largura_rua = 1;
-    int Largura_Borda = 1;
-    int minimo_tamanho = 6;
-    int maximo_tamanho = 8;
+    int numero_Quadrados = 12;
+    int Largura_rua = 2;
+    int Largura_Borda = 2;
+    int minimo_tamanho = 16;
+    int maximo_tamanho = 18;
     int Distancia_minima = maximo_tamanho;
     
 
