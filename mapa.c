@@ -180,7 +180,6 @@ void marcarCaminho(char **maze, int solucaoX[], int solucaoY[], int tamanho_solu
     int last_y = solucaoY[tamanho_solucao - 1];
     maze[last_y][last_x] = DESTINO;
 
-
     return;
 }
 
@@ -501,3 +500,4 @@ void desalocarMapa(Mapa *mapa)
     free(mapa->matriz);
     free(mapa);
 }
+
