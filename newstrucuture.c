@@ -26,14 +26,18 @@
 #define ESQUERDA '<'
 #define CIMA '^'
 #define BAIXO 'v'
+#define TAXI 'T'
 
-#define CALCADA_EMOJI "🟫"  
+#define CALCADA_EMOJI "⬛"  
 #define RUA_EMOJI "⬜"       
-#define PASSENGER_EMOJI "🚶" 
+#define PASSENGER_EMOJI "🙋" 
 #define DESTINO_EMOJI "🏠"   
+#define TAXI_EMOJI "🚖"
 
 #define MAP_VERTICAL_PROPORTION 0.5
 #define MAP_HORIZONTAL_PROPORTION 0.4
+
+#define MAX_TAXIS 10
 
 // -------------------- STRUCTURES --------------------
 
@@ -123,9 +127,13 @@ void init_queue(MessageQueue* queue) {
 }
 
 // Enqueue a message
-void enqueue_message(MessageQueue* queue, MessageType type) {
+void enqueue_message(MessageQueue* queue, MessageType type, int x, int y, int extra_x, int extra_y) {
     Message* new_msg = malloc(sizeof(Message));
     new_msg->type = type;
+    new_msg->data_x = x;
+    new_msg->data_y = y;
+    new_msg->extra_x = extra_x;
+    new_msg->extra_y = extra_y;
     new_msg->next = NULL;
 
     pthread_mutex_lock(&queue->lock);
@@ -590,17 +598,17 @@ void* input_thread(void* arg) {
             switch (key) {
                 case 'r': // Reset the map
                     printf("Key 'r' pressed: Resetting the map.\n");
-                    enqueue_message(&center->queue, RESET_MAP);
+                    enqueue_message(&center->queue, RESET_MAP, 0, 0, 0, 0);
                     break;
 
                 case 'p': // Add a passenger
                     printf("Key 'p' pressed: Adding a passenger.\n");
-                    enqueue_message(&center->queue, CREATE_PASSENGER);
+                    enqueue_message(&center->queue, CREATE_PASSENGER, 0, 0, 0, 0);
                     break;
 
                 case 'q': // Quit the program
                     printf("Key 'q' pressed: Exiting the program.\n");
-                    enqueue_message(&center->queue, EXIT_PROGRAM);
+                    enqueue_message(&center->queue, EXIT_PROGRAM, 0, 0, 0, 0);
                     tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore old terminal settings
                     return NULL;
 
@@ -639,14 +647,14 @@ void* control_center_thread(void* arg) {
                 pthread_mutex_unlock(&center->lock);
 
                 // Forward the message to the visualizer thread
-                enqueue_message(visualizerQueue, CREATE_PASSENGER);
+                enqueue_message(visualizerQueue, CREATE_PASSENGER,0, 0, 0, 0);
                 break;
 
             case RESET_MAP:
                 printf("Resetting the map.\n");
 
                 pthread_mutex_lock(&center->lock);
-                enqueue_message(visualizerQueue, RESET_MAP); // Signal the visualizer thread to exit
+                enqueue_message(visualizerQueue, RESET_MAP, 0, 0, 0, 0); // Signal the visualizer thread to exit
                 pthread_mutex_unlock(&center->lock);
 
                 break;
@@ -654,7 +662,7 @@ void* control_center_thread(void* arg) {
             case EXIT_PROGRAM:
                 // Terminate all threads and restart
                 pthread_mutex_lock(&center->lock);
-                enqueue_message(visualizerQueue, EXIT); // Signal the visualizer thread to exit
+                enqueue_message(visualizerQueue, EXIT, 0, 0, 0, 0); // Signal the visualizer thread to exit
                 pthread_mutex_unlock(&center->lock);
 
                 // Wait for the visualizer thread to exit
