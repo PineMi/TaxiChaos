@@ -27,6 +27,14 @@
 #define CIMA '^'
 #define BAIXO 'v'
 
+#define CALCADA_EMOJI "🟫"  
+#define RUA_EMOJI "⬜"       
+#define PASSENGER_EMOJI "🚶" 
+#define DESTINO_EMOJI "🏠"   
+
+#define MAP_VERTICAL_PROPORTION 0.5
+#define MAP_HORIZONTAL_PROPORTION 0.4
+
 // -------------------- STRUCTURES --------------------
 
 // Node for BFS
@@ -102,6 +110,7 @@ static void desenharQuadrado(Mapa *mapa, Quadrado q, int largura_borda);
 static void conectarQuadradosMST(Mapa *mapa, Quadrado *quadrados, int num_quadrados);
 static void encontrarPontosConexao(Quadrado a, Quadrado b, int *px1, int *py1, int *px2, int *py2);
 void init_operations();
+void renderMap(Mapa* mapa);
 
 // -------------------- QUEUE FUNCTIONS --------------------
 
@@ -157,9 +166,13 @@ Mapa* criarMapa() {
         return NULL;
     }
 
+    // Scale the terminal size by 0.6
+    int scaled_rows = (int)(ws.ws_row * MAP_VERTICAL_PROPORTION);
+    int scaled_cols = (int)(ws.ws_col * MAP_HORIZONTAL_PROPORTION);
+
     Mapa* mapa = malloc(sizeof(Mapa));
-    mapa->linhas = ws.ws_row;
-    mapa->colunas = ws.ws_col;
+    mapa->linhas = scaled_rows;
+    mapa->colunas = scaled_cols;
     mapa->largura_rua = 1;
 
     mapa->matriz = malloc(mapa->linhas * sizeof(char*));
@@ -256,10 +269,39 @@ void gerarMapa(Mapa* mapa, int num_quadrados, int largura_rua, int largura_borda
 }
 
 // Print the map
-void imprimirMapa(Mapa* mapa) {
+void imprimirMapaLogico(Mapa* mapa) {
     for (int i = 0; i < mapa->linhas; i++) {
         for (int j = 0; j < mapa->colunas; j++) {
             printf("%c", mapa->matriz[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+// Render the map with emojis
+void renderMap(Mapa* mapa) {
+    if (!mapa || !mapa->matriz) {
+        printf("Error: Map is not initialized.\n");
+        return;
+    }
+
+    for (int i = 0; i < mapa->linhas; i++) {
+        for (int j = 0; j < mapa->colunas; j++) {
+            switch (mapa->matriz[i][j]) {
+                case CALCADA:
+                    printf(CALCADA_EMOJI);
+                    break;
+                case RUA:
+                    printf(RUA_EMOJI);
+                    break;
+                case DESTINO:
+                    printf(DESTINO_EMOJI);
+                    break;
+                default:
+                    // For now, treat all other symbols (e.g., passengers) as a person emoji
+                    printf(PASSENGER_EMOJI);
+                    break;
+            }
         }
         printf("\n");
     }
@@ -646,8 +688,8 @@ void* visualizador_thread(void* arg) {
               visualizer->minTamanho, visualizer->maxTamanho, visualizer->distanciaMinima);
 
     // Print the map after generation
-    imprimirMapa(mapa);
-
+    imprimirMapaLogico(mapa);
+    renderMap(mapa); // TODO: DEIXAR APENAS O RENDER DEPOIS
     while (1) {
         // Dequeue a message
         Message* msg = dequeue_message(&visualizer->queue);
@@ -657,8 +699,8 @@ void* visualizador_thread(void* arg) {
                 int solucaoX[10000], solucaoY[10000], tamanho_solucao = 0;
                 if (encontraCaminho(msg->data_x, msg->data_y, mapa->matriz, mapa->colunas, mapa->linhas,
                                     solucaoX, solucaoY, &tamanho_solucao) == 0) {
-                    marcarCaminho(mapa->matriz, solucaoX, solucaoY, tamanho_solucao);
-                    imprimirMapa(mapa); // Prints the map after marking the path
+                    //marcarCaminho(mapa->matriz, solucaoX, solucaoY, tamanho_solucao);
+                    imprimirMapaLogico(mapa); // Prints the map after marking the path
                 } else {
                     printf("Pathfinding failed.\n");
                 }
@@ -692,7 +734,8 @@ void* visualizador_thread(void* arg) {
 
                 // Add the passenger to the map
                 mapa->matriz[random_y][random_x] = 'A' + (rand() % 26); // Random letter for passenger
-                imprimirMapa(mapa); // Prints the map after adding a passenger
+                imprimirMapaLogico(mapa); // Prints the map after adding a passenger
+                renderMap(mapa);
                 break;
             }
 
@@ -720,7 +763,8 @@ void* visualizador_thread(void* arg) {
                           visualizer->minTamanho, visualizer->maxTamanho, visualizer->distanciaMinima);
 
                 // Print the new map
-                imprimirMapa(mapa);
+                imprimirMapaLogico(mapa);
+                renderMap(mapa);
                 break;
             }
 
@@ -749,7 +793,13 @@ void init_operations() {
     init_queue(&center.queue);
 
     // Initialize the visualizer
-    InitVisualizer visualizer = {50, 2, 2, 5, 15, 1};
+    // int numQuadrados;
+    // int larguraRua;
+    // int larguraBorda;
+    // int minTamanho;
+    // int maxTamanho;
+    // int distanciaMinima;
+    InitVisualizer visualizer = {10, 2, 2, 5, 13, 2};
     init_queue(&visualizer.queue);
 
     // Link the visualizer queue to the control center
