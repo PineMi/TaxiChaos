@@ -825,14 +825,44 @@ void* control_center_thread(void* arg) {
                 break;
             }
 
-            case RESET_MAP:
-                printf("Resetting the map.\n");
+            case RESET_MAP: {
+                printf("Resetting the map and destroying all taxis.\n");
 
                 pthread_mutex_lock(&center->lock);
-                enqueue_message(visualizerQueue, RESET_MAP, 0, 0, 0, 0, NULL); // Signal the visualizer thread to exit
+
+                // Send EXIT to all taxis
+                for (int i = 0; i < center->numTaxis; i++) {
+                    Taxi* taxi = center->taxis[i];
+                    if (taxi != NULL) {
+                        enqueue_message(&taxi->queue, EXIT, 1, 0, 0, 0, NULL);
+                    }
+                }
+
+                // Wait for all taxi threads to terminate
+                for (int i = 0; i < center->numTaxis; i++) {
+                    Taxi* taxi = center->taxis[i];
+                    if (taxi != NULL) {
+                        pthread_join(taxi->thread_id, NULL);
+
+                        // Clean up the taxi
+                        pthread_mutex_destroy(&taxi->lock);
+                        cleanup_queue(&taxi->queue);
+                        free(taxi);
+                    }
+                }
+
+                // Reset the taxi array and counter
+                center->numTaxis = 0;
+                for (int i = 0; i < MAX_TAXIS; i++) {
+                    center->taxis[i] = NULL;
+                }
+
                 pthread_mutex_unlock(&center->lock);
 
+                // Forward the RESET_MAP command to the visualizer
+                enqueue_message(visualizerQueue, RESET_MAP, 0, 0, 0, 0, NULL);
                 break;
+            }
 
             case EXIT_PROGRAM:
                 pthread_mutex_lock(&center->lock);
@@ -842,7 +872,7 @@ void* control_center_thread(void* arg) {
                 for (int i = 0; i < center->numTaxis; i++) {
                     Taxi* taxi = center->taxis[i];
                     if (taxi != NULL) {
-                        enqueue_message(&taxi->queue, EXIT, 0, 0, 0, 0, NULL);
+                        enqueue_message(&taxi->queue, EXIT, 1, 0, 0, 0, NULL);
                     }
                 }
             
@@ -1012,18 +1042,29 @@ void* visualizador_thread(void* arg) {
                 printf("Visualizer: Moving taxi from (%d, %d) to (%d, %d).\n", 
                        msg->data_x, msg->data_y, msg->extra_x, msg->extra_y);
             
-                // Garantir que o mapa está válido
+                // Ensure the map is valid
                 if (!mapa || !mapa->matriz) {
                     printf("Error: Map is not initialized.\n");
                     break;
                 }
             
-                // Atualizar o mapa: mover o táxi
-                mapa->matriz[msg->extra_y][msg->extra_x] = TAXI; // Colocar o táxi na nova posição
-                if(msg->data_x >= 0 && msg->data_y >= 0){ // Verifica se a posição antiga é válida
-                    mapa->matriz[msg->data_y][msg->data_x] = RUA;   // Liberar a posição antiga
+                // Handle the special case where the taxi is exiting
+                if (msg->extra_x == -1 && msg->extra_y == -1) {
+                    // Remove the taxi from the map
+                    if (msg->data_x >= 0 && msg->data_y >= 0) {
+                        mapa->matriz[msg->data_y][msg->data_x] = RUA; // Clear the old position
+                    }
+                    renderMap(mapa);
+                    break;
                 }
-                // Renderizar o mapa atualizado
+            
+                // Update the map: move the taxi
+                mapa->matriz[msg->extra_y][msg->extra_x] = TAXI; // Place the taxi in the new position
+                if (msg->data_x >= 0 && msg->data_y >= 0) { // Check if the old position is valid
+                    mapa->matriz[msg->data_y][msg->data_x] = RUA; // Clear the old position
+                }
+            
+                // Render the updated map
                 renderMap(mapa);
                 break;
             }
@@ -1074,6 +1115,12 @@ void* taxi_thread(void* arg) {
     
             case EXIT:
                 printf("Taxi %d received EXIT command. Terminating thread.\n", taxi->id);
+                if (msg->data_x == 1) {
+                    printf("Taxi %d exiting due to program termination or reset.\n", taxi->id);
+                } else {
+                    printf("Taxi %d was killed.\n", taxi->id);
+                    enqueue_message(taxi->visualizerQueue, MOVE_TO, taxi->x, taxi->y, -1, -1, NULL);
+                }
                 free(msg);
                 return NULL;
 
