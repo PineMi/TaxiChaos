@@ -27,6 +27,7 @@
 #define CIMA '^'
 #define BAIXO 'v'
 #define TAXI 'T'
+#define PASSENGER 'P'
 
 #define CALCADA_EMOJI "⬛"  
 #define RUA_EMOJI "⬜"       
@@ -68,7 +69,12 @@ typedef enum {
     EXIT_PROGRAM,
     PATHFIND_REQUEST,
     RANDOM_REQUEST,
-    EXIT
+    EXIT,
+    STATUS_REQUEST,
+    CREATE_TAXI,
+    DESTROY_TAXI,
+    SPAWN_TAXI,
+    MOVE_TO
 } MessageType;
 
 // Message structure
@@ -79,6 +85,7 @@ typedef struct Message {
     int data_y;
     int extra_x;
     int extra_y;
+    void* pointer;
 } Message;
 
 // Message queue structure
@@ -89,13 +96,30 @@ typedef struct {
     pthread_cond_t cond;
 } MessageQueue;
 
+
+// Taxi structure
+typedef struct {
+    int id;
+    int x, y;
+    bool isFree;
+    int currentPassenger;
+    MessageQueue queue;  
+    pthread_mutex_t lock;
+    MessageQueue control_queue;
+    MessageQueue* visualizerQueue; 
+    pthread_t thread_id; 
+} Taxi;
+
 // Control center structure
 typedef struct {
     int numPassengers;
     pthread_mutex_t lock;
     MessageQueue queue;
     MessageQueue* visualizerQueue; // Added visualizer queue reference
+    Taxi* taxis[MAX_TAXIS];
+    int numTaxis;
 } ControlCenter;
+
 
 // Visualizer structure
 typedef struct {
@@ -109,12 +133,14 @@ typedef struct {
 } InitVisualizer;
 
 
+
 // Function prototypes
 static void desenharQuadrado(Mapa *mapa, Quadrado q, int largura_borda);
 static void conectarQuadradosMST(Mapa *mapa, Quadrado *quadrados, int num_quadrados);
 static void encontrarPontosConexao(Quadrado a, Quadrado b, int *px1, int *py1, int *px2, int *py2);
 void init_operations();
 void renderMap(Mapa* mapa);
+pthread_t create_taxi_thread(Taxi* taxi);
 
 // -------------------- QUEUE FUNCTIONS --------------------
 
@@ -127,13 +153,14 @@ void init_queue(MessageQueue* queue) {
 }
 
 // Enqueue a message
-void enqueue_message(MessageQueue* queue, MessageType type, int x, int y, int extra_x, int extra_y) {
+void enqueue_message(MessageQueue* queue, MessageType type, int x, int y, int extra_x, int extra_y, void* pointer) {
     Message* new_msg = malloc(sizeof(Message));
     new_msg->type = type;
     new_msg->data_x = x;
     new_msg->data_y = y;
     new_msg->extra_x = extra_x;
     new_msg->extra_y = extra_y;
+    new_msg->pointer = pointer;
     new_msg->next = NULL;
 
     pthread_mutex_lock(&queue->lock);
@@ -162,6 +189,24 @@ Message* dequeue_message(MessageQueue* queue) {
 
     pthread_mutex_unlock(&queue->lock);
     return msg;
+}
+
+// Cleanup the queue
+void cleanup_queue(MessageQueue* queue) {
+    pthread_mutex_lock(&queue->lock); // Lock the queue to ensure thread safety
+
+    Message* current = queue->head;
+    while (current != NULL) {
+        Message* next = current->next; // Save the next message
+        free(current);                 // Free the current message
+        current = next;                // Move to the next message
+    }
+
+    // Reset the queue
+    queue->head = NULL;
+    queue->tail = NULL;
+
+    pthread_mutex_unlock(&queue->lock); // Unlock the queue
 }
 
 // -------------------- MAP FUNCTIONS --------------------
@@ -305,9 +350,14 @@ void renderMap(Mapa* mapa) {
                 case DESTINO:
                     printf(DESTINO_EMOJI);
                     break;
-                default:
-                    // For now, treat all other symbols (e.g., passengers) as a person emoji
+                case PASSENGER:
                     printf(PASSENGER_EMOJI);
+                    break;
+                case TAXI:
+                    printf(TAXI_EMOJI);
+                    break;
+                default:
+                    printf("?"); // Empty space
                     break;
             }
         }
@@ -546,32 +596,32 @@ static void conectarQuadradosMST(Mapa *mapa, Quadrado *quadrados, int num_quadra
 
 static void encontrarPontosConexao(Quadrado a, Quadrado b, int *px1, int *py1, int *px2, int *py2)
 {
-// Pontos médios nas bordas (otimizado)
-int a_centro_x = a.x + a.tamanho / 2; // coluna
-int a_centro_y = a.y + a.tamanho / 2; // linha
-int b_centro_x = b.x + b.tamanho / 2;
-int b_centro_y = b.y + b.tamanho / 2;
+    // Pontos médios nas bordas (otimizado)
+    int a_centro_x = a.x + a.tamanho / 2; // coluna
+    int a_centro_y = a.y + a.tamanho / 2; // linha
+    int b_centro_x = b.x + b.tamanho / 2;
+    int b_centro_y = b.y + b.tamanho / 2;
 
-// Determina a direção relativa entre quadrados
-int delta_x = b_centro_x - a_centro_x;
-int delta_y = b_centro_y - a_centro_y;
+    // Determina a direção relativa entre quadrados
+    int delta_x = b_centro_x - a_centro_x;
+    int delta_y = b_centro_y - a_centro_y;
 
-// Escolhe pontos de conexão baseado na posição relativa
-if (abs(delta_x) > abs(delta_y))
-{
-// Conectar horizontalmente
-*px1 = (delta_x > 0) ? (a.x + a.tamanho - 1) : a.x; // Direita ou esquerda
-*py1 = a_centro_y;
-*px2 = (delta_x > 0) ? b.x : (b.x + b.tamanho - 1);
-*py2 = b_centro_y;
-}
-else
-{
-// Conectar verticalmente
-*px1 = a_centro_x;
-*py1 = (delta_y > 0) ? (a.y + a.tamanho - 1) : a.y; // Base ou topo
-*px2 = b_centro_x;
-*py2 = (delta_y > 0) ? b.y : (b.y + b.tamanho - 1);
+    // Escolhe pontos de conexão baseado na posição relativa
+    if (abs(delta_x) > abs(delta_y))
+    {
+    // Conectar horizontalmente
+    *px1 = (delta_x > 0) ? (a.x + a.tamanho - 1) : a.x; // Direita ou esquerda
+    *py1 = a_centro_y;
+    *px2 = (delta_x > 0) ? b.x : (b.x + b.tamanho - 1);
+    *py2 = b_centro_y;
+    }
+    else
+    {
+    // Conectar verticalmente
+    *px1 = a_centro_x;
+    *py1 = (delta_y > 0) ? (a.y + a.tamanho - 1) : a.y; // Base ou topo
+    *px2 = b_centro_x;
+    *py2 = (delta_y > 0) ? b.y : (b.y + b.tamanho - 1);
 }
 }
 
@@ -594,32 +644,52 @@ void* input_thread(void* arg) {
         key = getchar();
 
         if (key != EOF) {
-            // Process the key
-            switch (key) {
-                case 'r': // Reset the map
-                    printf("Key 'r' pressed: Resetting the map.\n");
-                    enqueue_message(&center->queue, RESET_MAP, 0, 0, 0, 0);
-                    break;
+            if (key == '\033') { // Escape sequence for arrow keys
+                getchar();       // Skip the '[' character
+                key = getchar(); // Get the actual arrow key
+                switch (key) {
+                    case 'A': // Up arrow
+                        printf("Up arrow pressed: Creating a taxi.\n");
+                        enqueue_message(&center->queue, CREATE_TAXI, 0, 0, 0, 0, NULL);
+                        break;
+                    case 'B': // Down arrow
+                        printf("Down arrow pressed: Destroying a taxi.\n");
+                        enqueue_message(&center->queue, DESTROY_TAXI, 0, 0, 0, 0, NULL);
+                        break;
+                }
+            } else {
+                // Process other keys
+                switch (key) {
+                    case 'r': // Reset the map
+                        printf("Key 'r' pressed: Resetting the map.\n");
+                        enqueue_message(&center->queue, RESET_MAP, 0, 0, 0, 0, NULL);
+                        break;
 
-                case 'p': // Add a passenger
-                    printf("Key 'p' pressed: Adding a passenger.\n");
-                    enqueue_message(&center->queue, CREATE_PASSENGER, 0, 0, 0, 0);
-                    break;
+                    case 'p': // Add a passenger
+                        printf("Key 'p' pressed: Adding a passenger.\n");
+                        enqueue_message(&center->queue, CREATE_PASSENGER, 0, 0, 0, 0, NULL);
+                        break;
 
-                case 'q': // Quit the program
-                    printf("Key 'q' pressed: Exiting the program.\n");
-                    enqueue_message(&center->queue, EXIT_PROGRAM, 0, 0, 0, 0);
-                    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore old terminal settings
-                    return NULL;
+                    case 's': // Status request
+                        printf("Key 's' pressed: Requesting status.\n");
+                        enqueue_message(&center->queue, STATUS_REQUEST, 0, 0, 0, 0, NULL);
+                        break;
 
-                default:
-                    printf("Unknown key '%c' pressed.\n", key);
-                    break;
+                    case 'q': // Quit the program
+                        printf("Key 'q' pressed: Exiting the program.\n");
+                        enqueue_message(&center->queue, EXIT_PROGRAM, 0, 0, 0, 0, NULL);
+                        tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore old terminal settings
+                        return NULL;
+
+                    default:
+                        printf("Unknown key '%c' pressed.\n", key);
+                        break;
+                }
             }
         }
 
         // Refresh rate (e.g., 100ms)
-        usleep(1000);
+        usleep(100000);
     }
 
     // Restore old terminal settings
@@ -638,6 +708,7 @@ void* control_center_thread(void* arg) {
         // Dequeue a message
         Message* msg = dequeue_message(&center->queue);
         printf("Reading message: %d\n", msg->type);
+
         // Process the message
         switch (msg->type) {
             case CREATE_PASSENGER:
@@ -647,28 +718,154 @@ void* control_center_thread(void* arg) {
                 pthread_mutex_unlock(&center->lock);
 
                 // Forward the message to the visualizer thread
-                enqueue_message(visualizerQueue, CREATE_PASSENGER,0, 0, 0, 0);
+                enqueue_message(visualizerQueue, CREATE_PASSENGER, 0, 0, 0, 0, NULL);
                 break;
+
+            case STATUS_REQUEST:
+                pthread_mutex_lock(&center->lock);
+                printf("Control Center Status: ACTIVE\n");
+                printf("Sending STATUS_REQUEST to all taxis.\n");
+                printf("Number of taxis: %d\n", center->numTaxis);
+                for (int i = 0; i < center->numTaxis; i++) {
+                    Taxi* taxi = center->taxis[i];
+                    if (taxi != NULL) {
+                        enqueue_message(&taxi->queue, STATUS_REQUEST, 0, 0, 0, 0, NULL);
+                    }
+                }
+                pthread_mutex_unlock(&center->lock);
+                break;
+
+            case CREATE_TAXI: {
+                pthread_mutex_lock(&center->lock);
+
+                if (center->numTaxis >= MAX_TAXIS) {
+                    printf("Cannot create more taxis. Maximum limit (%d) reached.\n", MAX_TAXIS);
+                    pthread_mutex_unlock(&center->lock);
+                    break;
+                }
+
+                // Allocate and initialize a new taxi
+                Taxi* new_taxi = malloc(sizeof(Taxi));
+                if (!new_taxi) {
+                    perror("Failed to allocate memory for taxi");
+                    pthread_mutex_unlock(&center->lock);
+                    break;
+                }
+
+                new_taxi->id = center->numTaxis + 1;
+                new_taxi->x = -1;
+                new_taxi->y = -1;
+                new_taxi->isFree = true;
+                new_taxi->currentPassenger = -1;
+                new_taxi->visualizerQueue = center->visualizerQueue;
+                pthread_mutex_init(&new_taxi->lock, NULL);
+                init_queue(&new_taxi->queue);
+
+                // Create the taxi thread
+                new_taxi->thread_id = create_taxi_thread(new_taxi);
+                // Store the taxi in the array
+                center->taxis[center->numTaxis] = new_taxi;
+                center->numTaxis++;
+
+                printf("Taxi %d created and thread started.\n", new_taxi->id);
+
+                pthread_mutex_unlock(&center->lock);
+                break;
+            }
+
+            case DESTROY_TAXI: {
+                pthread_mutex_lock(&center->lock);
+
+                if (center->numTaxis <= 0) {
+                    printf("No taxis to destroy.\n");
+                    pthread_mutex_unlock(&center->lock);
+                    break;
+                }
+
+                // Find a free taxi to destroy
+                int taxi_index_to_destroy = -1;
+                for (int i = center->numTaxis - 1; i >= 0; i--) {
+                    if (center->taxis[i]->isFree) {
+                        taxi_index_to_destroy = i;
+                        break;
+                    }
+                }
+
+                if (taxi_index_to_destroy == -1) {
+                    printf("No free taxis available to destroy.\n");
+                    pthread_mutex_unlock(&center->lock);
+                    break;
+                }
+
+                // Get the taxi to destroy
+                Taxi* taxi_to_destroy = center->taxis[taxi_index_to_destroy];
+
+                // Send EXIT message to the taxi
+                enqueue_message(&taxi_to_destroy->queue, EXIT, 0, 0, 0, 0, NULL);
+
+                // Wait for the taxi thread to terminate
+                pthread_join(taxi_to_destroy->thread_id, NULL);
+
+                // Clean up the taxi
+                pthread_mutex_destroy(&taxi_to_destroy->lock);
+                cleanup_queue(&taxi_to_destroy->queue); // Free all messages in the queue
+                free(taxi_to_destroy);
+
+                // Remove the taxi from the array and shift remaining taxis
+                for (int i = taxi_index_to_destroy; i < center->numTaxis - 1; i++) {
+                    center->taxis[i] = center->taxis[i + 1];
+                    center->taxis[i]->id = i + 1; // Update the ID to maintain consistency
+                }
+                center->taxis[center->numTaxis - 1] = NULL;
+                center->numTaxis--;
+
+                printf("Taxi destroyed. Remaining taxis: %d\n", center->numTaxis);
+
+                pthread_mutex_unlock(&center->lock);
+                break;
+            }
 
             case RESET_MAP:
                 printf("Resetting the map.\n");
 
                 pthread_mutex_lock(&center->lock);
-                enqueue_message(visualizerQueue, RESET_MAP, 0, 0, 0, 0); // Signal the visualizer thread to exit
+                enqueue_message(visualizerQueue, RESET_MAP, 0, 0, 0, 0, NULL); // Signal the visualizer thread to exit
                 pthread_mutex_unlock(&center->lock);
 
                 break;
 
             case EXIT_PROGRAM:
-                // Terminate all threads and restart
                 pthread_mutex_lock(&center->lock);
-                enqueue_message(visualizerQueue, EXIT, 0, 0, 0, 0); // Signal the visualizer thread to exit
+
+                // Send EXIT message to all taxis
+                printf("Sending EXIT message to all taxis.\n");
+                for (int i = 0; i < center->numTaxis; i++) {
+                    Taxi* taxi = center->taxis[i];
+                    if (taxi != NULL) {
+                        enqueue_message(&taxi->queue, EXIT, 0, 0, 0, 0, NULL);
+                    }
+                }
+            
+                // Wait for all taxi threads to terminate
+                for (int i = 0; i < center->numTaxis; i++) {
+                    Taxi* taxi = center->taxis[i];
+                    if (taxi != NULL) {
+                        pthread_join(taxi->thread_id, NULL);
+            
+                        // Clean up the taxi
+                        pthread_mutex_destroy(&taxi->lock);
+                        cleanup_queue(&taxi->queue);
+                        free(taxi);
+                    }
+                }
+            
+                center->numTaxis = 0; // Reset the taxi count
+            
+                // Send EXIT message to the visualizer thread
+                enqueue_message(visualizerQueue, EXIT, 0, 0, 0, 0, NULL);
                 pthread_mutex_unlock(&center->lock);
-
-                // Wait for the visualizer thread to exit
-                pthread_join(pthread_self(), NULL);
+            
                 printf("Exiting control center thread.\n");
-
                 free(msg);
                 return NULL;
 
@@ -741,7 +938,7 @@ void* visualizador_thread(void* arg) {
                 }
 
                 // Add the passenger to the map
-                mapa->matriz[random_y][random_x] = 'A' + (rand() % 26); // Random letter for passenger
+                mapa->matriz[random_y][random_x] = PASSENGER;
                 imprimirMapaLogico(mapa); // Prints the map after adding a passenger
                 renderMap(mapa);
                 break;
@@ -775,6 +972,61 @@ void* visualizador_thread(void* arg) {
                 renderMap(mapa);
                 break;
             }
+            
+            case SPAWN_TAXI: {
+                printf("Visualizer: Received SPAWN_TAXI request.\n");
+
+                // Garantir que o mapa está válido
+                if (!mapa || !mapa->matriz) {
+                    printf("Error: Map is not initialized.\n");
+                    break;
+                }
+
+                // Calcular um ponto aleatório no mapa
+                int random_x, random_y;
+                int attempts = 0;
+                const int max_attempts = 1000;
+
+                do {
+                    random_x = rand() % mapa->colunas;
+                    random_y = rand() % mapa->linhas;
+                    attempts++;
+                } while (mapa->matriz[random_y][random_x] != CAMINHO_LIVRE && attempts < max_attempts);
+
+                if (attempts >= max_attempts) {
+                    printf("Error: Could not find a free position for the taxi.\n");
+                    break;
+                }
+
+                // Obter o ponteiro para a fila do táxi a partir do campo pointer
+                MessageQueue* taxi_queue = (MessageQueue*)msg->pointer;
+
+                // Enviar SPAWN_TAXI para a fila do táxi com as coordenadas calculadas
+                enqueue_message(taxi_queue, SPAWN_TAXI, random_x, random_y, 0, 0, NULL);
+
+                printf("Visualizer: Sent SPAWN_TAXI to taxi queue with coordinates (%d, %d).\n", random_x, random_y);
+                break;
+            }
+
+            case MOVE_TO: {
+                printf("Visualizer: Moving taxi from (%d, %d) to (%d, %d).\n", 
+                       msg->data_x, msg->data_y, msg->extra_x, msg->extra_y);
+            
+                // Garantir que o mapa está válido
+                if (!mapa || !mapa->matriz) {
+                    printf("Error: Map is not initialized.\n");
+                    break;
+                }
+            
+                // Atualizar o mapa: mover o táxi
+                mapa->matriz[msg->extra_y][msg->extra_x] = TAXI; // Colocar o táxi na nova posição
+                if(msg->data_x >= 0 && msg->data_y >= 0){ // Verifica se a posição antiga é válida
+                    mapa->matriz[msg->data_y][msg->data_x] = RUA;   // Liberar a posição antiga
+                }
+                // Renderizar o mapa atualizado
+                renderMap(mapa);
+                break;
+            }
 
             case EXIT:
                 printf("Exiting visualizer thread.\n");
@@ -791,14 +1043,76 @@ void* visualizador_thread(void* arg) {
     }
 }
 
+// Taxi thread
+void* taxi_thread(void* arg) {
+    Taxi* taxi = (Taxi*)arg;
+
+    printf("Taxi %d thread started at position (%d, %d).\n", taxi->id, taxi->x, taxi->y);
+    printf("Taxi %d visualizer queue: %p\n", taxi->id, &taxi->visualizerQueue);
+    enqueue_message(taxi->visualizerQueue, SPAWN_TAXI, taxi->x, taxi->y, 0, 0, &taxi->queue);
+    while (1) {
+        // Dequeue a message
+        Message* msg = dequeue_message(&taxi->queue);
+
+        // Process the message
+        switch (msg->type) {
+            case SPAWN_TAXI: 
+                printf("Taxi %d received SPAWN_TAXI: Moving to (%d, %d).\n", 
+                       taxi->id, msg->data_x, msg->data_y);
+            
+                // Enviar a mensagem MOVE_TO para o visualizador
+                enqueue_message(taxi->visualizerQueue, MOVE_TO, 
+                                taxi->x, taxi->y, msg->data_x, msg->data_y, NULL);
+            
+                // Atualizar a posição do táxi para o destino
+                pthread_mutex_lock(&taxi->lock);
+                taxi->x = msg->data_x;
+                taxi->y = msg->data_y;
+                pthread_mutex_unlock(&taxi->lock);
+            
+                break;
+    
+            case EXIT:
+                printf("Taxi %d received EXIT command. Terminating thread.\n", taxi->id);
+                free(msg);
+                return NULL;
+
+            case STATUS_REQUEST:
+                printf("Taxi %d status request: Position (%d, %d), Free: %s\n", taxi->id, taxi->x, taxi->y,
+                       taxi->isFree ? "Yes" : "No");
+                break;
+
+            default:
+                printf("Taxi %d received unknown message type: %d\n", taxi->id, msg->type);
+                break;
+        }
+        free(msg);
+    }
+}
+
+// Create a taxi thread
+pthread_t create_taxi_thread(Taxi* taxi) {
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, taxi_thread, taxi) != 0) {
+        perror("Failed to create taxi thread");
+        exit(EXIT_FAILURE);
+    }
+    return thread;
+}
+
 // -------------------- MAIN FUNCTION --------------------
 
 void init_operations() {
     // Initialize the control center
     ControlCenter center;
     center.numPassengers = 0;
+    center.numTaxis = 0;
     pthread_mutex_init(&center.lock, NULL);
     init_queue(&center.queue);
+
+    for (int i = 0; i < MAX_TAXIS; i++) {
+        center.taxis[i] = NULL; // Initialize taxi array
+    }
 
     // Initialize the visualizer
     // int numQuadrados;
