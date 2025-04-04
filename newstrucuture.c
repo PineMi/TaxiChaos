@@ -28,26 +28,18 @@
 // 400 - 499 Destinos passageiros
 // 500 - 599 Rotas de Taxis (Marcação para não gerar um passageiro em uma rota de um taxi)
 
-// Lista de Demandas
 // - Jogar os comandos de letra para lowercase no input_thread
-// - Reajustar a Matriz para seguir o modelo de entidades
-// - Reajustar o visualizador para marcar as rotas de Taxi bloqueando o spawn dos passageiros
-// - Criar estrutura de passageiro e lógica para sempre atualizar e buscar um caminho para eles (pode ser uma fila)
-// - Protocolo de Busca do passageiro
-// - Protocolo de criação de um destino válido 
-// - Protocolo de levar o passageiro até o destino
 
-/* 
-Alternativa: Uma forma de resolver o problema de geração de destinos e 
-passageiros e de evitar o atropelamento seria selecionarmos campos aleatórios com 
-o critério de que ele deve ser adjacente a uma calçada.
-Com isso o emoji em sí do passageiro e do destino ficaria na calçada, o caminho seguiria normal
-e o taxi não teria problemas de colisão.
+// Lista de Demandas
+// - SPAWN COM IDs
+// - Render por IDs
+// - No Spawn de passageiro BFS para o taxi livre mais próximo
+// - Rota do taxi selecionado até o passageiro
+// - Chegada no passageiro (Atualizar a matriz) 
+// - Rota até Destino
+// - Chegada
 
-Para isso precisa reajustar o algoritmo de escolha de números aleatórios adicionando essa restrição.
-APENAS PARA O CASO DO PASSAGEIRO E DESTINO. NÃO ALTERAR A FUNÇÃO E SIM UMA CÓPIA.
-(Pouparia a parte de marcar a rota dos taxis na matriz e ficaria mais realista)
-*/
+
 
 
 // -------------------- CONSTANTS --------------------
@@ -56,14 +48,15 @@ APENAS PARA O CASO DO PASSAGEIRO E DESTINO. NÃO ALTERAR A FUNÇÃO E SIM UMA C�
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define MAX_TENTATIVAS 1000
-#define TAXI_REFRESH_RATE 1000000
-#define TAXI_SPEED_FACTOR 1
+#define TAXI_REFRESH_RATE 200000
+#define TAXI_SPEED_FACTOR 5
+#define MAX_PASSENGERS 100
 
-#define TAXI_LIVRE 100 //100 - 199 taxis livres
-#define TAXI_OCUPADO 200 //200 - 299 taxis livres
-#define PASSAGEIROS 300 //300 - 399 taxis livres
-#define DESTINOS_PASSAGEIROS 400 // 400 - 499 taxis livres
-#define CAMINHO_LIVRE 0
+#define R_TAXI_LIVRE 100 //100 - 199 taxis livres
+#define R_TAXI_OCUPADO 200 //200 - 299 taxis livres
+#define R_PASSENGER 300 //300 - 399 taxis livres
+#define R_DESTINOS_PASSAGEIROS 400 // 400 - 499 taxis livres
+#define R_PONTO_PASSAGEIRO 500 // 500 - 599 taxis livres
 #define RUA 0
 #define CALCADA 1
 
@@ -85,6 +78,7 @@ APENAS PARA O CASO DO PASSAGEIRO E DESTINO. NÃO ALTERAR A FUNÇÃO E SIM UMA C�
 #define PASSENGER_EMOJI "🙋" 
 #define DESTINO_EMOJI "🏠"   
 #define TAXI_EMOJI "🚖"
+#define PASSENGER_PONTO_EMOJI "🔲"
 
 #define MAP_VERTICAL_PROPORTION 0.5
 #define MAP_HORIZONTAL_PROPORTION 0.4
@@ -115,11 +109,21 @@ typedef struct {
     int linhas, colunas;
     int largura_rua;
     int **matriz;
+    pthread_mutex_t lock; 
 } Mapa;
+
+typedef struct {
+    int id;
+    int x_calcada;
+    int y_calcada;
+    int x_rua;
+    int y_rua;
+} Passenger;
 
 // Message types
 typedef enum {
     CREATE_PASSENGER,
+    DELETE_PASSENGER,
     RESET_MAP,
     EXIT_PROGRAM,
     PATHFIND_REQUEST,
@@ -132,7 +136,10 @@ typedef enum {
     SPAWN_TAXI,
     MOVE_TO,
     FINISH,
-    PRINT_LOGICO
+    PRINT_LOGICO,
+    DROP,
+    GOT_PASSENGER
+    
 } MessageType;
 
 // Message structure
@@ -171,6 +178,8 @@ typedef struct {
     MessageQueue* control_queue;
     MessageQueue* visualizerQueue; 
     pthread_t thread_id; 
+    pthread_cond_t drop_cond; 
+    bool drop_processed; 
 } Taxi;
 
 // Control center structure
@@ -181,6 +190,8 @@ typedef struct {
     MessageQueue* visualizerQueue; // Added visualizer queue reference
     Taxi* taxis[MAX_TAXIS];
     int numTaxis;
+    Passenger* passengers[MAX_PASSENGERS]; // Passenger vector
+
 } ControlCenter;
 
 
@@ -415,7 +426,7 @@ void gerarMapa(Mapa* mapa, int num_quadrados, int largura_rua, int largura_borda
 void imprimirMapaLogico(Mapa* mapa) {
     for (int i = 0; i < mapa->linhas; i++) {
         for (int j = 0; j < mapa->colunas; j++) {
-            printf("%c", mapa->matriz[i][j]);
+            printf("%d", mapa->matriz[i][j]);
         }
         printf("\n");
     }
@@ -447,6 +458,18 @@ void renderMap(Mapa* mapa) {
                     printf(TAXI_EMOJI);
                     break;
                 default:
+                    if (mapa->matriz[i][j] >= R_PASSENGER && mapa->matriz[i][j] < R_PASSENGER + 100) {
+                        printf(PASSENGER_EMOJI);
+                        break;
+                    }
+                    if (mapa->matriz[i][j] >= R_TAXI_LIVRE && mapa->matriz[i][j] < R_TAXI_OCUPADO + 100) {
+                        printf(TAXI_EMOJI);
+                        break;
+                    }
+                    if (mapa->matriz[i][j] >= R_PONTO_PASSAGEIRO && mapa->matriz[i][j] < R_PONTO_PASSAGEIRO + 100) {
+                        printf(PASSENGER_PONTO_EMOJI);
+                        break;
+                    }
                     printf("?"); // Empty space
                     break;
             }
@@ -484,7 +507,7 @@ int encontraCaminho(int col_inicio, int lin_inicio, int **maze, int num_colunas,
         Node atual = fila[inicio++];
 
         // Check if it's the destination
-        if (maze[atual.y][atual.x] >= destino && maze[atual.y][atual.x] < destino) {
+        if (maze[atual.y][atual.x] >= destino && maze[atual.y][atual.x] < destino + 100) {
             // Count the path length
             int contador = 0;
             int index = inicio - 1;
@@ -520,7 +543,7 @@ int encontraCaminho(int col_inicio, int lin_inicio, int **maze, int num_colunas,
             }
 
             // Check if it's a valid path and not visited
-            if ((maze[nova_lin][nova_col] == CAMINHO_LIVRE ||( maze[nova_lin][nova_col] >= destino && maze[nova_lin][nova_col] < destino)) &&
+            if ((maze[nova_lin][nova_col] == RUA ||( maze[nova_lin][nova_col] >= destino && maze[nova_lin][nova_col] < destino + 100)) &&
                 visitado[nova_lin][nova_col] == -1) {
                 visitado[nova_lin][nova_col] = inicio - 1;
                 fila[fim++] = (Node){.x = nova_col, .y = nova_lin, .parent_index = inicio - 1};
@@ -601,7 +624,7 @@ int encontraCaminhoCoordenadas(int col_inicio, int lin_inicio, int col_destino, 
             }
 
             // Check if it's a valid path and not visited
-            if ((maze[nova_lin][nova_col] == CAMINHO_LIVRE || (nova_col == col_destino && nova_lin == lin_destino)) &&
+            if ((maze[nova_lin][nova_col] == RUA || (nova_col == col_destino && nova_lin == lin_destino)) &&
                 visitado[nova_lin][nova_col] == -1) {
                 visitado[nova_lin][nova_col] = inicio - 1;
                 fila[fim++] = (Node){.x = nova_col, .y = nova_lin, .parent_index = inicio - 1};
@@ -810,7 +833,7 @@ bool find_random_free_point(Mapa* mapa, int* random_x, int* random_y) {
         *random_x = rand() % mapa->colunas;
         *random_y = rand() % mapa->linhas;
         attempts++;
-    } while (mapa->matriz[*random_y][*random_x] != CAMINHO_LIVRE && attempts < max_attempts);
+    } while (mapa->matriz[*random_y][*random_x] != RUA && attempts < max_attempts);
 
     if (attempts >= max_attempts) {
         printf("Error: Could not find a free position on the map.\n");
@@ -818,6 +841,50 @@ bool find_random_free_point(Mapa* mapa, int* random_x, int* random_y) {
     }
 
     return true;
+}
+
+// Finds a random free point on the map that is adjacent to a CALCADA
+bool find_random_free_point_adjacent_to_calcada(Mapa* mapa, int* free_x, int* free_y, int* calcada_x, int* calcada_y) {
+    const int max_attempts = MAX_TENTATIVAS;
+    int attempts = 0;
+
+    if (!mapa || !mapa->matriz) {
+        printf("Error: Map is not initialized.\n");
+        return false;
+    }
+
+    do {
+        // Generate a random free point
+        *free_x = rand() % mapa->colunas;
+        *free_y = rand() % mapa->linhas;
+
+        // Check if the point is free (RUA)
+        if (mapa->matriz[*free_y][*free_x] == RUA) {
+            // Check all adjacent points for a CALCADA
+            int delta_x[] = {0, 0, -1, 1};
+            int delta_y[] = {-1, 1, 0, 0};
+
+            for (int i = 0; i < 4; i++) {
+                int adj_x = *free_x + delta_x[i];
+                int adj_y = *free_y + delta_y[i];
+
+                // Ensure the adjacent point is within bounds
+                if (adj_x >= 0 && adj_x < mapa->colunas && adj_y >= 0 && adj_y < mapa->linhas) {
+                    // Check if the adjacent point is a CALCADA
+                    if (mapa->matriz[adj_y][adj_x] == CALCADA) {
+                        *calcada_x = adj_x;
+                        *calcada_y = adj_y;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        attempts++;
+    } while (attempts < max_attempts);
+
+    printf("Error: Could not find a free position adjacent to a CALCADA.\n");
+    return false;
 }
 
 // -------------------- THREAD FUNCTIONS --------------------
@@ -937,12 +1004,38 @@ void* control_center_thread(void* arg) {
         switch (msg->type) {
             case CREATE_PASSENGER:
                 pthread_mutex_lock(&center->lock);
-                center->numPassengers++;
-                printf("Passenger created. Total passengers: %d\n", center->numPassengers);
-                pthread_mutex_unlock(&center->lock);
 
-                // Forward the message to the visualizer thread
-                enqueue_message(visualizerQueue, CREATE_PASSENGER, 0, 0, 0, 0, NULL);
+                if (center->numPassengers >= MAX_PASSENGERS) {
+                    printf("Cannot create more passengers. Maximum limit (%d) reached.\n", MAX_PASSENGERS);
+                    pthread_mutex_unlock(&center->lock);
+                    break;
+                }
+            
+                // Allocate memory for a new passenger
+                Passenger* new_passenger = malloc(sizeof(Passenger));
+                if (!new_passenger) {
+                    perror("Failed to allocate memory for passenger");
+                    pthread_mutex_unlock(&center->lock);
+                    break;
+                }
+            
+                // Assign an ID and initialize the passenger
+                new_passenger->id = center->numPassengers + 1;
+                new_passenger->x_calcada = -1; // Placeholder values
+                new_passenger->y_calcada = -1;
+                new_passenger->x_rua = -1;
+                new_passenger->y_rua = -1;
+            
+                // Store the passenger in the vector
+                center->passengers[center->numPassengers] = new_passenger;
+                center->numPassengers++;
+            
+                printf("Passenger %d created. Total passengers: %d\n", new_passenger->id, center->numPassengers);
+            
+                pthread_mutex_unlock(&center->lock);
+            
+                // Forward the passenger pointer to the visualizer
+                enqueue_message(visualizerQueue, CREATE_PASSENGER, 0, 0, 0, 0, new_passenger);
                 break;
 
             case STATUS_REQUEST:
@@ -983,6 +1076,8 @@ void* control_center_thread(void* arg) {
                 new_taxi->currentPassenger = -1;
                 new_taxi->visualizerQueue = center->visualizerQueue;
                 new_taxi->control_queue = &center->queue;
+                new_taxi->drop_processed = false;
+                pthread_cond_init(&new_taxi->drop_cond, NULL);
                 pthread_mutex_init(&new_taxi->lock, NULL);
                 init_queue(&new_taxi->queue);
 
@@ -1033,6 +1128,7 @@ void* control_center_thread(void* arg) {
 
                 // Clean up the taxi
                 pthread_mutex_destroy(&taxi_to_destroy->lock);
+                pthread_cond_destroy(&taxi_to_destroy->drop_cond);
                 cleanup_queue(&taxi_to_destroy->queue); // Free all messages in the queue
                 free(taxi_to_destroy);
 
@@ -1059,7 +1155,8 @@ void* control_center_thread(void* arg) {
                 for (int i = 0; i < center->numTaxis; i++) {
                     Taxi* taxi = center->taxis[i];
                     if (taxi != NULL) {
-                        enqueue_message(&taxi->queue, EXIT, 1, 0, 0, 0, NULL);
+                        priority_enqueue_message(&taxi->queue, DROP, 0, 0, 0, 0, NULL);
+                        priority_enqueue_message(&taxi->queue, EXIT, 1, 0, 0, 0, NULL);
                     }
                 }
 
@@ -1071,6 +1168,7 @@ void* control_center_thread(void* arg) {
 
                         // Clean up the taxi
                         pthread_mutex_destroy(&taxi->lock);
+                        pthread_cond_destroy(&taxi->drop_cond);
                         cleanup_queue(&taxi->queue);
                         free(taxi);
                     }
@@ -1142,16 +1240,34 @@ void* control_center_thread(void* arg) {
                         pthread_mutex_unlock(&center->lock);
 
                         if (taxi) {
+                            pthread_mutex_lock(&taxi->lock);
+                            taxi->drop_processed = false;
+            
+                            priority_enqueue_message(&taxi->queue, DROP, 0, 0, 0, 0, NULL);
+                            while (!taxi->drop_processed) {
+                                pthread_cond_wait(&taxi->drop_cond, &taxi->lock);
+                            }
+                            pthread_mutex_unlock(&taxi->lock);
+                            printf("Control Center: Taxi ID %d has processed DROP. Sending new instructions.\n", taxi->id);
+
+                            if(msg->extra_y != 0) {
+                                taxi->isFree = false;
+                                taxi->currentPassenger = msg->extra_y;
+                            }
+                            printf("Control Center Ordered Taxi ID %d to drop off Queue.\n", taxi->id);
+                            
                             // Iterate through the path and send MOVE_TO messages to the taxi
                             for (int i = 1; i < path_data->tamanho_solucao; i++) {
                                 int next_x = path_data->solucaoX[i];
                                 int next_y = path_data->solucaoY[i];
-
                                 enqueue_message(&taxi->queue, MOVE_TO, next_x, next_y, 0, 0, NULL);
                             }
 
                             // Send a FINISH message to the taxi after completing the route
                             enqueue_message(&taxi->queue, FINISH, 0, 0, 0, 0, NULL);
+                            if(msg->extra_y != 0) {
+                                enqueue_message(&taxi->queue, GOT_PASSENGER, 0, 0, 0, 0, NULL);
+                            }
                         } else {
                             printf("Control Center: Taxi ID %d not found.\n", msg->extra_x);
                         }
@@ -1165,6 +1281,52 @@ void* control_center_thread(void* arg) {
                     printf("Control Center: No path data received.\n");
                 }
 
+                break;
+            }
+
+            case GOT_PASSENGER: {
+                int passenger_id = msg->data_x; // Extract the passenger ID from the message
+            
+                pthread_mutex_lock(&center->lock);
+            
+                // Find the passenger in the vector
+                Passenger* passenger = NULL;
+                for (int i = 0; i < center->numPassengers; i++) {
+                    if (center->passengers[i] && center->passengers[i]->id == passenger_id) {
+                        passenger = center->passengers[i];
+                        break;
+                    }
+                }
+            
+                if (passenger) {
+                    printf("Control Center: Taxi picked up Passenger ID %d at (%d, %d).\n",
+                           passenger->id, passenger->x_calcada, passenger->y_calcada);
+            
+                    // Send DELETE_PASSENGER to the visualizer
+                    enqueue_message(center->visualizerQueue, DELETE_PASSENGER,
+                                    passenger->x_calcada, passenger->y_calcada,
+                                    passenger->x_rua, passenger->y_rua, NULL);
+            
+                    // Remove the passenger from the vector
+                    for (int i = 0; i < center->numPassengers; i++) {
+                        if (center->passengers[i] == passenger) {
+                            free(center->passengers[i]); // Free the passenger memory
+                            center->passengers[i] = NULL;
+            
+                            // Shift remaining passengers in the vector
+                            for (int j = i; j < center->numPassengers - 1; j++) {
+                                center->passengers[j] = center->passengers[j + 1];
+                            }
+                            center->passengers[center->numPassengers - 1] = NULL;
+                            center->numPassengers--;
+                            break;
+                        }
+                    }
+                } else {
+                    printf("Control Center: Passenger ID %d not found.\n", passenger_id);
+                }
+            
+                pthread_mutex_unlock(&center->lock);
                 break;
             }
 
@@ -1188,6 +1350,7 @@ void* control_center_thread(void* arg) {
 
                         // Clean up the taxi
                         pthread_mutex_destroy(&taxi->lock);
+                        pthread_cond_destroy(&taxi->drop_cond);
                         cleanup_queue(&taxi->queue);
                         free(taxi);
                     }
@@ -1292,19 +1455,34 @@ void* visualizador_thread(void* arg) {
                     printf("Error: Map is not initialized.\n");
                     break;
                 }
+                Passenger* passenger = (Passenger*)msg->pointer;
 
-                int random_x, random_y;
+                int free_x, free_y, calcada_x, calcada_y;
 
-                // Find a random free position on the map
-                if (!find_random_free_point(mapa, &random_x, &random_y)) {
-                    printf("Error: Could not find a free position for the passenger.\n");
+                // Find a random free position adjacent to a CALCADA
+                if (!find_random_free_point_adjacent_to_calcada(mapa, &free_x, &free_y, &calcada_x, &calcada_y)) {
+                    printf("Error: Could not find a valid position for the passenger.\n");
                     break;
                 }
-
-                // Add the passenger to the map
-                mapa->matriz[random_y][random_x] = PASSENGER;
-                imprimirMapaLogico(mapa); // Prints the map after adding a passenger
+                passenger->x_calcada = calcada_x;
+                passenger->y_calcada = calcada_y;
+                passenger->x_rua = free_x;
+                passenger->y_rua = free_y;
+                // Add the passenger to the CALCADA
+                mapa->matriz[calcada_y][calcada_x] = passenger->id + R_PASSENGER;
+                mapa->matriz[free_y][free_x] = passenger->id + R_PONTO_PASSAGEIRO;
+                // Render the updated map
                 renderMap(mapa);
+                
+                int* solucaoX = malloc(10000 * sizeof(int));
+                int* solucaoY = malloc(10000 * sizeof(int));
+                int tamanho_solucao = 0;
+                // Buscar um taxi próximo
+                encontraCaminho(free_x, free_y,mapa->matriz, mapa->colunas, mapa->linhas,
+                                solucaoX, solucaoY, &tamanho_solucao, R_TAXI_LIVRE);
+
+                enqueue_message(&visualizer->queue, PATHFIND_REQUEST, solucaoX[tamanho_solucao - 1], solucaoY[tamanho_solucao - 1], free_x, free_y, NULL);
+
                 break;
             }
 
@@ -1375,28 +1553,117 @@ void* visualizador_thread(void* arg) {
                     printf("Error: Map is not initialized.\n");
                     break;
                 }
-            
+                 // Lock the map for writing
+
                 // Handle the special case where the taxi is exiting
                 if (msg->extra_x == -1 && msg->extra_y == -1) {
                     // Remove the taxi from the map
                     if (msg->data_x >= 0 && msg->data_y >= 0) {
+                        pthread_mutex_lock(&mapa->lock);
                         mapa->matriz[msg->data_y][msg->data_x] = RUA; // Clear the old position
+                        pthread_mutex_unlock(&mapa->lock);
                     }
                     renderMap(mapa);
                     break;
                 }
-            
+                
+                Taxi* taxi = (Taxi*)msg->pointer;
+                int taxi_id = taxi->id;
+                bool taxi_isFree = taxi->isFree;
                 // Update the map: move the taxi
-                mapa->matriz[msg->extra_y][msg->extra_x] = TAXI; // Place the taxi in the new position
+                pthread_mutex_lock(&mapa->lock);
+
+                mapa->matriz[msg->extra_y][msg->extra_x] = taxi_id+(taxi_isFree? R_TAXI_LIVRE : R_TAXI_OCUPADO); // Place the taxi in the new position
                 if (msg->data_x >= 0 && msg->data_y >= 0) { // Check if the old position is valid
                     mapa->matriz[msg->data_y][msg->data_x] = RUA; // Clear the old position
                 }
-            
+                pthread_mutex_unlock(&mapa->lock);
+
+
                 // Render the updated map
                 renderMap(mapa);
                 break;
             }
 
+            case PATHFIND_REQUEST: {
+                printf("Visualizer: Received PATHFIND_REQUEST.\n");
+
+                // Ensure the map is valid
+                if (!mapa || !mapa->matriz) {
+                    printf("Error: Map is not initialized.\n");
+                    break;
+                }
+                // Add debugging prints
+                printf("Visualizer: Taxi coordinates (%d, %d) to passenger coordinates (%d, %d).\n", msg->data_x, msg->data_y, msg->extra_x, msg->extra_y);
+                int taxi_x = msg->data_x;
+                int taxi_y = msg->data_y;
+                int passenger_x = msg->extra_x;
+                int passenger_y = msg->extra_y;
+
+                int taxi_id = mapa->matriz[taxi_y][taxi_x];
+                taxi_id = taxi_id % R_TAXI_LIVRE; // Remove the last digit to get the taxi ID
+
+                printf("Visualizer: Taxi ID %d at (%d, %d) requested path to passenger at (%d, %d).\n", taxi_id, taxi_x, taxi_y, passenger_x, passenger_y);
+                // Find the path using encontrarCaminhoCoordenadas
+                int* solucaoX = malloc(10000 * sizeof(int));
+                int* solucaoY = malloc(10000 * sizeof(int));
+                int tamanho_solucao = 0;
+
+                // Find the path using encontrarCaminhoCoordenadas
+                if (encontraCaminhoCoordenadas(taxi_x, taxi_y, passenger_x, passenger_y, mapa->matriz, mapa->colunas, mapa->linhas,
+                    solucaoX, solucaoY, &tamanho_solucao) == 0) {
+                // Pathfinding succeeded
+                PathData* path_data = malloc(sizeof(PathData));
+                path_data->solucaoX = solucaoX;
+                path_data->solucaoY = solucaoY;
+                path_data->tamanho_solucao = tamanho_solucao;
+                int id_passageiro = mapa->matriz[passenger_y][passenger_x] % R_PONTO_PASSAGEIRO; 
+                // Send the ROUTE_PLAN message to the control center
+                enqueue_message(visualizer->control_queue, ROUTE_PLAN, taxi_x, taxi_y, taxi_id, id_passageiro, path_data);
+                } else {
+                // Pathfinding failed
+                //printf("Visualizer: Pathfinding failed for Taxi ID %d. Sending ROUTE_PLAN with path length 0.\n", taxi_id);
+
+                // Create a PathData structure with path length 0
+                PathData* path_data = malloc(sizeof(PathData));
+                path_data->solucaoX = NULL;
+                path_data->solucaoY = NULL;
+                path_data->tamanho_solucao = 0;
+
+                // Send the ROUTE_PLAN message to the control center
+                enqueue_message(visualizer->control_queue, ROUTE_PLAN, taxi_x, taxi_y, taxi_id, 0, path_data);
+
+                // Free the allocated memory for the solution arrays
+                free(solucaoX);
+                free(solucaoY);
+                }
+
+                break;
+            }
+            
+            case DELETE_PASSENGER: {
+                printf("Visualizer: Deleting passenger from map.\n");
+            
+                // Ensure the map is valid
+                if (!mapa || !mapa->matriz) {
+                    printf("Error: Map is not initialized.\n");
+                    break;
+                }
+                
+                // Extract the coordinates from the message
+                int calcada_x = msg->data_x;
+                int calcada_y = msg->data_y;
+                int rua_x = msg->extra_x;
+                int rua_y = msg->extra_y;
+                pthread_mutex_lock(&mapa->lock);
+                // Remove the passenger from the map
+                mapa->matriz[calcada_y][calcada_x] = CALCADA; // Clear the CALCADA position
+                //mapa->matriz[rua_y][rua_x] = RUA;        // Clear the RUA position
+                pthread_mutex_unlock(&mapa->lock); 
+                // Render the updated map
+                renderMap(mapa);
+                break;
+            }
             case PRINT_LOGICO:
                 imprimirMapaLogico(mapa); // Print the logical map
                 break;
@@ -1416,7 +1683,7 @@ void* visualizador_thread(void* arg) {
     }
 }
 
-// Taxi thread
+// Taxi Thread
 void* taxi_thread(void* arg) {
     Taxi* taxi = (Taxi*)arg;
 
@@ -1434,13 +1701,26 @@ void* taxi_thread(void* arg) {
 
         // Process the message
         switch (msg->type) {
+            case DROP:
+                printf("Taxi %d received DROP command. Clearing its queue.\n", taxi->id);
+
+                // Clear all messages in the taxi's queue
+                cleanup_queue(&taxi->queue);
+            
+                // Signal the Control Center that DROP has been processed
+                pthread_mutex_lock(&taxi->lock);
+                taxi->drop_processed = true;
+                pthread_cond_signal(&taxi->drop_cond);
+                pthread_mutex_unlock(&taxi->lock);
+
+                break;
             case SPAWN_TAXI: 
                 printf("Taxi %d received SPAWN_TAXI: Moving to (%d, %d).\n", 
                        taxi->id, msg->data_x, msg->data_y);
             
                 // Enviar a mensagem MOVE_TO para o visualizador
                 enqueue_message(taxi->visualizerQueue, MOVE_TO, 
-                                taxi->x, taxi->y, msg->data_x, msg->data_y, NULL);
+                                taxi->x, taxi->y, msg->data_x, msg->data_y, taxi);
             
                 // Atualizar a posição do táxi para o destino
                 pthread_mutex_lock(&taxi->lock);
@@ -1453,7 +1733,7 @@ void* taxi_thread(void* arg) {
             case MOVE_TO: 
                 //printf("Taxi %d received MOVE_TO: Move to (%d, %d).\n", taxi->id, msg->data_x, msg->data_y);
                 
-                usleep(TAXI_REFRESH_RATE * (taxi->isFree * TAXI_SPEED_FACTOR)); 
+                usleep(TAXI_REFRESH_RATE * (1+(taxi->isFree * TAXI_SPEED_FACTOR))); 
                 
                 pthread_mutex_lock(&taxi->lock);
                 int old_x = taxi->x;
@@ -1462,14 +1742,21 @@ void* taxi_thread(void* arg) {
                 taxi->y = msg->data_y;
                 pthread_mutex_unlock(&taxi->lock);
                 
-                enqueue_message(taxi->visualizerQueue, MOVE_TO, old_x, old_y, msg->data_x, msg->data_y, NULL);
+                enqueue_message(taxi->visualizerQueue, MOVE_TO, old_x, old_y, msg->data_x, msg->data_y, taxi);
                 
                 break;
                               
+            case GOT_PASSENGER:
+                printf("Taxi %d received GOT_PASSENGER command. Picking up passenger.\n", taxi->id);
+                usleep(TAXI_REFRESH_RATE);
+                enqueue_message(taxi->control_queue, GOT_PASSENGER, taxi->currentPassenger, 0, 0, 0, NULL);
+                break;
+
             case FINISH:
                 //printf("Taxi %d received FINISH command. Reporting to control center.\n", taxi->id);
                 usleep(1000000);
                 // Send RANDOM_REQUEST to the control center
+                taxi->isFree = true;
                 enqueue_message(taxi->control_queue, RANDOM_REQUEST, taxi->x, taxi->y, taxi->id, 0, NULL);
 
                 break;   
