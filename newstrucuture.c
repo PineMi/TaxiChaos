@@ -56,19 +56,27 @@ APENAS PARA O CASO DO PASSAGEIRO E DESTINO. NÃO ALTERAR A FUNÇÃO E SIM UMA C�
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define MAX_TENTATIVAS 1000
-#define TAXI_REFRESH_RATE 100000
-#define TAXI_SPEED_FACTOR 2
+#define TAXI_REFRESH_RATE 1000000
+#define TAXI_SPEED_FACTOR 1
 
-#define CAMINHO_LIVRE '0'
+#define TAXI_LIVRE 100 //100 - 199 taxis livres
+#define TAXI_OCUPADO 200 //200 - 299 taxis livres
+#define PASSAGEIROS 300 //300 - 399 taxis livres
+#define DESTINOS_PASSAGEIROS 400 // 400 - 499 taxis livres
+#define CAMINHO_LIVRE 0
+#define RUA 0
+#define CALCADA 1
+
+
 #define ORIGEM 'E' // TIRAR ISSO
 #define DESTINO 'S'  // TIRAR ISSO
 #define VISITADO '-'
-#define RUA '0'
-#define CALCADA '1'
 #define DIREITA '>'
 #define ESQUERDA '<'
 #define CIMA '^'
 #define BAIXO 'v'
+
+
 #define TAXI 'T'
 #define PASSENGER 'P'
 
@@ -106,7 +114,7 @@ typedef struct {
 typedef struct {
     int linhas, colunas;
     int largura_rua;
-    char **matriz;
+    int **matriz;
 } Mapa;
 
 // Message types
@@ -310,9 +318,9 @@ Mapa* criarMapa() {
     mapa->colunas = scaled_cols;
     mapa->largura_rua = 1;
 
-    mapa->matriz = malloc(mapa->linhas * sizeof(char*));
+    mapa->matriz = malloc(mapa->linhas * sizeof(int*));
     for (int i = 0; i < mapa->linhas; i++) {
-        mapa->matriz[i] = malloc(mapa->colunas * sizeof(char));
+        mapa->matriz[i] = malloc(mapa->colunas * sizeof(int));
         for (int j = 0; j < mapa->colunas; j++) {
             mapa->matriz[i][j] = CALCADA;
         }
@@ -448,8 +456,8 @@ void renderMap(Mapa* mapa) {
 }
 
 // Find path in the map
-int encontraCaminho(int col_inicio, int lin_inicio, char **maze, int num_colunas, int num_linhas,
-                    int solucaoCol[], int solucaoLin[], int *tamanho_solucao) {
+int encontraCaminho(int col_inicio, int lin_inicio, int **maze, int num_colunas, int num_linhas,
+                    int solucaoCol[], int solucaoLin[], int *tamanho_solucao, int destino) {
     // BFS queue
     Node *fila = malloc(num_colunas * num_linhas * sizeof(Node));
     int inicio = 0, fim = 0;
@@ -476,7 +484,7 @@ int encontraCaminho(int col_inicio, int lin_inicio, char **maze, int num_colunas
         Node atual = fila[inicio++];
 
         // Check if it's the destination
-        if (maze[atual.y][atual.x] == DESTINO) {
+        if (maze[atual.y][atual.x] >= destino && maze[atual.y][atual.x] < destino) {
             // Count the path length
             int contador = 0;
             int index = inicio - 1;
@@ -512,7 +520,7 @@ int encontraCaminho(int col_inicio, int lin_inicio, char **maze, int num_colunas
             }
 
             // Check if it's a valid path and not visited
-            if ((maze[nova_lin][nova_col] == CAMINHO_LIVRE || maze[nova_lin][nova_col] == DESTINO) &&
+            if ((maze[nova_lin][nova_col] == CAMINHO_LIVRE ||( maze[nova_lin][nova_col] >= destino && maze[nova_lin][nova_col] < destino)) &&
                 visitado[nova_lin][nova_col] == -1) {
                 visitado[nova_lin][nova_col] = inicio - 1;
                 fila[fim++] = (Node){.x = nova_col, .y = nova_lin, .parent_index = inicio - 1};
@@ -529,7 +537,7 @@ int encontraCaminho(int col_inicio, int lin_inicio, char **maze, int num_colunas
 
 // Find path with specific coordinates
 int encontraCaminhoCoordenadas(int col_inicio, int lin_inicio, int col_destino, int lin_destino,
-                               char **maze, int num_colunas, int num_linhas,
+                               int **maze, int num_colunas, int num_linhas,
                                int solucaoCol[], int solucaoLin[], int *tamanho_solucao) {
     // BFS queue
     Node *fila = malloc(num_colunas * num_linhas * sizeof(Node));
@@ -609,7 +617,7 @@ int encontraCaminhoCoordenadas(int col_inicio, int lin_inicio, int col_destino, 
 }
 
 // Mark the path on the map
-void marcarCaminho(char **maze, int solucaoX[], int solucaoY[], int tamanho_solucao) {
+void marcarCaminho(int **maze, int solucaoX[], int solucaoY[], int tamanho_solucao) {
     if (tamanho_solucao <= 0 || maze == NULL || solucaoX == NULL || solucaoY == NULL) {
         return;
     }
