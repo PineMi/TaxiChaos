@@ -9,18 +9,59 @@
 #include <limits.h>
 #include <sys/ioctl.h>
 
+// Comandos
+// p - Criar passageiro
+// r - Resetar mapa
+// l - Imprimir mapa lógico
+// s - Status taxis
+// q - Sair
+// ↑ - Criar taxi
+// ↓ - Destruir taxi
+// Space - Pausar/Retomar (Obs, visualizador continua funcionando)
+
+// Entidades na matriz
+// 0 - Caminho livre
+// 1 - Calçada/Prédios
+// 100 - 199 Taxis Livres
+// 200 - 299 Taxis Ocupados
+// 300 - 399 Passageiros
+// 400 - 499 Destinos passageiros
+// 500 - 599 Rotas de Taxis (Marcação para não gerar um passageiro em uma rota de um taxi)
+
+// Lista de Demandas
+// - Jogar os comandos de letra para lowercase no input_thread
+// - Reajustar a Matriz para seguir o modelo de entidades
+// - Reajustar o visualizador para marcar as rotas de Taxi bloqueando o spawn dos passageiros
+// - Criar estrutura de passageiro e lógica para sempre atualizar e buscar um caminho para eles (pode ser uma fila)
+// - Protocolo de Busca do passageiro
+// - Protocolo de criação de um destino válido 
+// - Protocolo de levar o passageiro até o destino
+
+/* 
+Alternativa: Uma forma de resolver o problema de geração de destinos e 
+passageiros e de evitar o atropelamento seria selecionarmos campos aleatórios com 
+o critério de que ele deve ser adjacente a uma calçada.
+Com isso o emoji em sí do passageiro e do destino ficaria na calçada, o caminho seguiria normal
+e o taxi não teria problemas de colisão.
+
+Para isso precisa reajustar o algoritmo de escolha de números aleatórios adicionando essa restrição.
+APENAS PARA O CASO DO PASSAGEIRO E DESTINO. NÃO ALTERAR A FUNÇÃO E SIM UMA CÓPIA.
+(Pouparia a parte de marcar a rota dos taxis na matriz e ficaria mais realista)
+*/
+
+
 // -------------------- CONSTANTS --------------------
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define MAX_TENTATIVAS 1000
-#define TAXI_REFRESH_RATE 1000000
+#define TAXI_REFRESH_RATE 100000
 #define TAXI_SPEED_FACTOR 2
 
 #define CAMINHO_LIVRE '0'
-#define ORIGEM 'E'
-#define DESTINO 'S'
+#define ORIGEM 'E' // TIRAR ISSO
+#define DESTINO 'S'  // TIRAR ISSO
 #define VISITADO '-'
 #define RUA '0'
 #define CALCADA '1'
@@ -42,6 +83,10 @@
 
 #define MAX_TAXIS 10
 
+// Global variables for pause/play functionality
+pthread_mutex_t pause_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t pause_cond = PTHREAD_COND_INITIALIZER;
+bool isPaused = false;
 // -------------------- STRUCTURES --------------------
 
 // Node for BFS
@@ -78,7 +123,8 @@ typedef enum {
     DESTROY_TAXI,
     SPAWN_TAXI,
     MOVE_TO,
-    FINISH
+    FINISH,
+    PRINT_LOGICO
 } MessageType;
 
 // Message structure
@@ -801,6 +847,18 @@ void* input_thread(void* arg) {
             } else {
                 // Process other keys
                 switch (key) {
+                    case ' ': // Spacebar to toggle pause/play
+                        pthread_mutex_lock(&pause_mutex);
+                        isPaused = !isPaused;
+                        if (!isPaused) {
+                            pthread_cond_broadcast(&pause_cond); // Resume all threads
+                            printf("Resuming all threads.\n");
+                        } else {
+                            printf("Pausing all threads.\n");
+                        }
+                        pthread_mutex_unlock(&pause_mutex);
+                        break;
+
                     case 'r': // Reset the map
                         printf("Key 'r' pressed: Resetting the map.\n");
                         enqueue_message(&center->queue, RESET_MAP, 0, 0, 0, 0, NULL);
@@ -816,12 +874,24 @@ void* input_thread(void* arg) {
                         enqueue_message(&center->queue, STATUS_REQUEST, 0, 0, 0, 0, NULL);
                         break;
 
+                    case 'l': // Print logical map
+                        printf("Key 'l' pressed: Printing logical map.\n");
+                        enqueue_message(center->visualizerQueue, PRINT_LOGICO, 0, 0, 0, 0, NULL);
+                        break;
+
                     case 'q': // Quit the program
+                        pthread_mutex_lock(&pause_mutex);
+                        if (isPaused) {
+                            isPaused = false; // Unpause the game
+                            pthread_cond_broadcast(&pause_cond); // Resume all threads
+                            printf("Resuming all threads before exiting.\n");
+                        }
+                        pthread_mutex_unlock(&pause_mutex);
+
                         printf("Key 'q' pressed: Exiting the program.\n");
                         enqueue_message(&center->queue, EXIT_PROGRAM, 0, 0, 0, 0, NULL);
                         tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore old terminal settings
                         return NULL;
-
                     default:
                         printf("Unknown key '%c' pressed.\n", key);
                         break;
@@ -846,6 +916,11 @@ void* control_center_thread(void* arg) {
     MessageQueue* visualizerQueue = center->visualizerQueue;
 
     while (1) {
+        pthread_mutex_lock(&pause_mutex);
+        while (isPaused) {
+            pthread_cond_wait(&pause_cond, &pause_mutex);
+        }
+        pthread_mutex_unlock(&pause_mutex);
         // Dequeue a message
         Message* msg = dequeue_message(&center->queue);
         //printf("Reading message: %d\n", msg->type);
@@ -1314,6 +1389,10 @@ void* visualizador_thread(void* arg) {
                 break;
             }
 
+            case PRINT_LOGICO:
+                imprimirMapaLogico(mapa); // Print the logical map
+                break;
+
             case EXIT:
                 printf("Exiting visualizer thread.\n");
                 desalocarMapa(mapa);
@@ -1337,6 +1416,11 @@ void* taxi_thread(void* arg) {
     printf("Taxi %d visualizer queue: %p\n", taxi->id, &taxi->visualizerQueue);
     enqueue_message(taxi->visualizerQueue, SPAWN_TAXI, taxi->x, taxi->y, 0, 0, &taxi->queue);
     while (1) {
+        pthread_mutex_lock(&pause_mutex);
+        while (isPaused) {
+            pthread_cond_wait(&pause_cond, &pause_mutex);
+        }
+        pthread_mutex_unlock(&pause_mutex);
         // Dequeue a message
         Message* msg = dequeue_message(&taxi->queue);
 
