@@ -74,7 +74,8 @@ typedef enum {
     CREATE_TAXI,
     DESTROY_TAXI,
     SPAWN_TAXI,
-    MOVE_TO
+    MOVE_TO,
+    FINISH
 } MessageType;
 
 // Message structure
@@ -105,7 +106,7 @@ typedef struct {
     int currentPassenger;
     MessageQueue queue;  
     pthread_mutex_t lock;
-    MessageQueue control_queue;
+    MessageQueue* control_queue;
     MessageQueue* visualizerQueue; 
     pthread_t thread_id; 
 } Taxi;
@@ -141,6 +142,7 @@ static void encontrarPontosConexao(Quadrado a, Quadrado b, int *px1, int *py1, i
 void init_operations();
 void renderMap(Mapa* mapa);
 pthread_t create_taxi_thread(Taxi* taxi);
+bool find_random_free_point(Mapa* mapa, int* random_x, int* random_y);
 
 // -------------------- QUEUE FUNCTIONS --------------------
 
@@ -445,6 +447,87 @@ int encontraCaminho(int col_inicio, int lin_inicio, char **maze, int num_colunas
     return 1;
 }
 
+// Find path with specific coordinates
+int encontraCaminhoCoordenadas(int col_inicio, int lin_inicio, int col_destino, int lin_destino,
+                               char **maze, int num_colunas, int num_linhas,
+                               int solucaoCol[], int solucaoLin[], int *tamanho_solucao) {
+    // BFS queue
+    Node *fila = malloc(num_colunas * num_linhas * sizeof(Node));
+    int inicio = 0, fim = 0;
+
+    // Visited matrix
+    int **visitado = malloc(num_linhas * sizeof(int *));
+    for (int lin = 0; lin < num_linhas; lin++) {
+        visitado[lin] = malloc(num_colunas * sizeof(int));
+        for (int col = 0; col < num_colunas; col++) {
+            visitado[lin][col] = -1;
+        }
+    }
+
+    // Add the starting node
+    fila[fim++] = (Node){.x = col_inicio, .y = lin_inicio, .parent_index = -1};
+    visitado[lin_inicio][col_inicio] = 0;
+
+    // Directions for moving (left, right, up, down)
+    int delta_col[] = {0, 0, -1, 1};
+    int delta_lin[] = {-1, 1, 0, 0};
+
+    // BFS loop
+    while (inicio < fim) {
+        Node atual = fila[inicio++];
+
+        // Check if it's the destination
+        if (atual.x == col_destino && atual.y == lin_destino) {
+            // Count the path length
+            int contador = 0;
+            int index = inicio - 1;
+            while (index != -1) {
+                contador++;
+                index = fila[index].parent_index;
+            }
+
+            // Fill the path in the correct order (start -> destination)
+            *tamanho_solucao = contador;
+            index = inicio - 1;
+            for (int i = contador - 1; i >= 0; i--) {
+                solucaoCol[i] = fila[index].x;
+                solucaoLin[i] = fila[index].y;
+                index = fila[index].parent_index;
+            }
+
+            // Free memory
+            for (int lin = 0; lin < num_linhas; lin++) free(visitado[lin]);
+            free(visitado);
+            free(fila);
+            return 0;
+        }
+
+        // Explore neighbors
+        for (int i = 0; i < 4; i++) {
+            int nova_col = atual.x + delta_col[i];
+            int nova_lin = atual.y + delta_lin[i];
+
+            // Check bounds
+            if (nova_col < 0 || nova_col >= num_colunas || nova_lin < 0 || nova_lin >= num_linhas) {
+                continue;
+            }
+
+            // Check if it's a valid path and not visited
+            if ((maze[nova_lin][nova_col] == CAMINHO_LIVRE || (nova_col == col_destino && nova_lin == lin_destino)) &&
+                visitado[nova_lin][nova_col] == -1) {
+                visitado[nova_lin][nova_col] = inicio - 1;
+                fila[fim++] = (Node){.x = nova_col, .y = nova_lin, .parent_index = inicio - 1};
+            }
+        }
+    }
+
+    // Free memory on failure
+    for (int lin = 0; lin < num_linhas; lin++) free(visitado[lin]);
+    free(visitado);
+    free(fila);
+    return 1;
+}
+
 // Mark the path on the map
 void marcarCaminho(char **maze, int solucaoX[], int solucaoY[], int tamanho_solucao) {
     if (tamanho_solucao <= 0 || maze == NULL || solucaoX == NULL || solucaoY == NULL) {
@@ -625,6 +708,30 @@ static void encontrarPontosConexao(Quadrado a, Quadrado b, int *px1, int *py1, i
 }
 }
 
+// Finds a random free point on the map
+bool find_random_free_point(Mapa* mapa, int* random_x, int* random_y) {
+    const int max_attempts = 1000;
+    int attempts = 0;
+
+    if (!mapa || !mapa->matriz) {
+        printf("Error: Map is not initialized.\n");
+        return false;
+    }
+
+    do {
+        *random_x = rand() % mapa->colunas;
+        *random_y = rand() % mapa->linhas;
+        attempts++;
+    } while (mapa->matriz[*random_y][*random_x] != CAMINHO_LIVRE && attempts < max_attempts);
+
+    if (attempts >= max_attempts) {
+        printf("Error: Could not find a free position on the map.\n");
+        return false;
+    }
+
+    return true;
+}
+
 // -------------------- THREAD FUNCTIONS --------------------
 
 // User input thread
@@ -758,6 +865,7 @@ void* control_center_thread(void* arg) {
                 new_taxi->isFree = true;
                 new_taxi->currentPassenger = -1;
                 new_taxi->visualizerQueue = center->visualizerQueue;
+                new_taxi->control_queue = &center->queue;
                 pthread_mutex_init(&new_taxi->lock, NULL);
                 init_queue(&new_taxi->queue);
 
@@ -864,6 +972,17 @@ void* control_center_thread(void* arg) {
                 break;
             }
 
+            case RANDOM_REQUEST:
+                pthread_mutex_lock(&center->lock);
+                printf("Control Center: Received RANDOM_REQUEST from Taxi ID %d at position (%d, %d).\n",
+                    msg->extra_x, msg->data_x, msg->data_y);
+                pthread_mutex_unlock(&center->lock);
+
+                // Forward the message to the visualizer
+                enqueue_message(visualizerQueue, RANDOM_REQUEST, msg->data_x, msg->data_y, msg->extra_x, 0, NULL);
+
+                break;
+
             case EXIT_PROGRAM:
                 pthread_mutex_lock(&center->lock);
 
@@ -930,17 +1049,55 @@ void* visualizador_thread(void* arg) {
         Message* msg = dequeue_message(&visualizer->queue);
 
         switch (msg->type) {
-            case PATHFIND_REQUEST: {
-                int solucaoX[10000], solucaoY[10000], tamanho_solucao = 0;
-                if (encontraCaminho(msg->data_x, msg->data_y, mapa->matriz, mapa->colunas, mapa->linhas,
-                                    solucaoX, solucaoY, &tamanho_solucao) == 0) {
-                    //marcarCaminho(mapa->matriz, solucaoX, solucaoY, tamanho_solucao);
-                    imprimirMapaLogico(mapa); // Prints the map after marking the path
-                } else {
-                    printf("Pathfinding failed.\n");
+            case RANDOM_REQUEST: {
+                printf("Visualizer: Received RANDOM_REQUEST from Taxi ID %d at position (%d, %d).\n",
+                       msg->extra_x, msg->data_x, msg->data_y);
+            
+                // Save the taxi's current position and ID
+                int taxi_x = msg->data_x;
+                int taxi_y = msg->data_y;
+                int taxi_id = msg->extra_x;
+            
+                // Find a random free point on the map
+                int random_x, random_y;
+                if (!find_random_free_point(mapa, &random_x, &random_y)) {
+                    printf("Visualizer: Could not find a random free point for Taxi ID %d.\n", taxi_id);
+                    break;
                 }
+                printf("Visualizer: Found random point at (%d, %d) for Taxi ID %d.\n", random_x, random_y, taxi_id);
+            
+                // Create vectors to store the solution path
+                int solucaoX[10000], solucaoY[10000];
+                int tamanho_solucao = 0;
+            
+                // Find the path using encontrarCaminhoCoordenadas
+                if (encontraCaminhoCoordenadas(taxi_x, taxi_y, random_x, random_y, mapa->matriz, mapa->colunas, mapa->linhas,
+                                               solucaoX, solucaoY, &tamanho_solucao) == 0) {
+                    printf("Visualizer: Path found for Taxi ID %d. Path length: %d\n", taxi_id, tamanho_solucao);
+            
+                    // Print the path for debugging
+                    printf("Visualizer: Path for Taxi ID %d:\n", taxi_id);
+                    for (int i = 0; i < tamanho_solucao; i++) {
+                        printf("(%d, %d) ", solucaoX[i], solucaoY[i]);
+                    }
+                    printf("\n");
+                } else {
+                    printf("Visualizer: Pathfinding failed for Taxi ID %d.\n", taxi_id);
+                }
+            
                 break;
             }
+            // case PATHFIND_REQUEST: {
+            //     int solucaoX[10000], solucaoY[10000], tamanho_solucao = 0;
+            //     if (encontraCaminho(msg->data_x, msg->data_y, mapa->matriz, mapa->colunas, mapa->linhas,
+            //                         solucaoX, solucaoY, &tamanho_solucao) == 0) {
+            //         //marcarCaminho(mapa->matriz, solucaoX, solucaoY, tamanho_solucao);
+            //         imprimirMapaLogico(mapa); // Prints the map after marking the path
+            //     } else {
+            //         printf("Pathfinding failed.\n");
+            //     }
+            //     break;
+            // }
 
             case CREATE_PASSENGER: {
                 printf("Adding a passenger.\n");
@@ -952,17 +1109,9 @@ void* visualizador_thread(void* arg) {
                 }
 
                 int random_x, random_y;
-                int attempts = 0;
-                const int max_attempts = 1000;
 
                 // Find a random free position on the map
-                do {
-                    random_x = rand() % mapa->colunas;
-                    random_y = rand() % mapa->linhas;
-                    attempts++;
-                } while (mapa->matriz[random_y][random_x] != CAMINHO_LIVRE && attempts < max_attempts);
-
-                if (attempts >= max_attempts) {
+                if (!find_random_free_point(mapa, &random_x, &random_y)) {
                     printf("Error: Could not find a free position for the passenger.\n");
                     break;
                 }
@@ -1014,16 +1163,8 @@ void* visualizador_thread(void* arg) {
 
                 // Calcular um ponto aleatório no mapa
                 int random_x, random_y;
-                int attempts = 0;
-                const int max_attempts = 1000;
 
-                do {
-                    random_x = rand() % mapa->colunas;
-                    random_y = rand() % mapa->linhas;
-                    attempts++;
-                } while (mapa->matriz[random_y][random_x] != CAMINHO_LIVRE && attempts < max_attempts);
-
-                if (attempts >= max_attempts) {
+                if (!find_random_free_point(mapa, &random_x, &random_y)) {
                     printf("Error: Could not find a free position for the taxi.\n");
                     break;
                 }
@@ -1033,8 +1174,10 @@ void* visualizador_thread(void* arg) {
 
                 // Enviar SPAWN_TAXI para a fila do táxi com as coordenadas calculadas
                 enqueue_message(taxi_queue, SPAWN_TAXI, random_x, random_y, 0, 0, NULL);
-
                 printf("Visualizer: Sent SPAWN_TAXI to taxi queue with coordinates (%d, %d).\n", random_x, random_y);
+                // Send FINISH to the taxi after it spawns
+                enqueue_message(taxi_queue, FINISH, 0, 0, 0, 0, NULL);
+                printf("Visualizer: Sent FINISH to taxi queue.\n");
                 break;
             }
 
@@ -1112,7 +1255,15 @@ void* taxi_thread(void* arg) {
                 pthread_mutex_unlock(&taxi->lock);
             
                 break;
-    
+            
+            case FINISH:
+                printf("Taxi %d received FINISH command. Reporting to control center.\n", taxi->id);
+
+                // Send RANDOM_REQUEST to the control center
+                enqueue_message(taxi->control_queue, RANDOM_REQUEST, taxi->x, taxi->y, taxi->id, 0, NULL);
+
+                break;   
+
             case EXIT:
                 printf("Taxi %d received EXIT command. Terminating thread.\n", taxi->id);
                 if (msg->data_x == 1) {
