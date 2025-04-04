@@ -69,6 +69,7 @@ typedef enum {
     EXIT_PROGRAM,
     PATHFIND_REQUEST,
     RANDOM_REQUEST,
+    ROUTE_PLAN,
     EXIT,
     STATUS_REQUEST,
     CREATE_TAXI,
@@ -97,6 +98,11 @@ typedef struct {
     pthread_cond_t cond;
 } MessageQueue;
 
+typedef struct {
+    int* solucaoX;         
+    int* solucaoY;         
+    int tamanho_solucao;   
+} PathData;
 
 // Taxi structure
 typedef struct {
@@ -131,7 +137,8 @@ typedef struct {
     int maxTamanho;
     int distanciaMinima;
     MessageQueue queue;
-} InitVisualizer;
+    MessageQueue* control_queue;
+} Visualizer;
 
 
 
@@ -172,6 +179,31 @@ void enqueue_message(MessageQueue* queue, MessageType type, int x, int y, int ex
         queue->tail->next = new_msg;
         queue->tail = new_msg;
     }
+    pthread_cond_signal(&queue->cond);
+    pthread_mutex_unlock(&queue->lock);
+}
+
+// Priority enqueue a message
+void priority_enqueue_message(MessageQueue* queue, MessageType type, int x, int y, int extra_x, int extra_y, void* pointer) {
+    Message* new_msg = malloc(sizeof(Message));
+    new_msg->type = type;
+    new_msg->data_x = x;
+    new_msg->data_y = y;
+    new_msg->extra_x = extra_x;
+    new_msg->extra_y = extra_y;
+    new_msg->pointer = pointer;
+    new_msg->next = NULL;
+
+    pthread_mutex_lock(&queue->lock);
+
+    // Insert the message at the head of the queue
+    if (queue->head == NULL) {
+        queue->head = queue->tail = new_msg;
+    } else {
+        new_msg->next = queue->head;
+        queue->head = new_msg;
+    }
+
     pthread_cond_signal(&queue->cond);
     pthread_mutex_unlock(&queue->lock);
 }
@@ -836,7 +868,7 @@ void* control_center_thread(void* arg) {
                 for (int i = 0; i < center->numTaxis; i++) {
                     Taxi* taxi = center->taxis[i];
                     if (taxi != NULL) {
-                        enqueue_message(&taxi->queue, STATUS_REQUEST, 0, 0, 0, 0, NULL);
+                        priority_enqueue_message(&taxi->queue, STATUS_REQUEST, 0, 0, 0, 0, NULL);
                     }
                 }
                 pthread_mutex_unlock(&center->lock);
@@ -983,37 +1015,89 @@ void* control_center_thread(void* arg) {
 
                 break;
 
+            case ROUTE_PLAN: {
+                //printf("Control Center: Received ROUTE_PLAN for Taxi ID %d.\n", msg->extra_x);
+                
+                // Extract the PathData structure from the message
+                PathData* path_data = (PathData*)msg->pointer;
+                
+                if (path_data) {
+                    //printf("Control Center: Path length: %d\n", path_data->tamanho_solucao);
+                
+                    // Declare the taxi variable outside the loop
+                    Taxi* taxi = NULL;
+            
+                        // Find the taxi by ID
+                    pthread_mutex_lock(&center->lock);
+                    for (int j = 0; j < center->numTaxis; j++) {
+                        if (center->taxis[j]->id == msg->extra_x) {
+                            taxi = center->taxis[j];
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&center->lock);
+                
+                    if (taxi) {
+                        // Iterate through the path and send MOVE_TO messages to the taxi
+                        for (int i = 0; i < path_data->tamanho_solucao; i++) {
+                            int next_x = path_data->solucaoX[i];
+                            int next_y = path_data->solucaoY[i];
+            
+                            //printf("Control Center: Sending MOVE_TO to Taxi ID %d: (%d, %d).\n", msg->extra_x, next_x, next_y);
+                
+                            // Send the MOVE_TO message to the taxi
+                            enqueue_message(&taxi->queue, MOVE_TO, next_x, next_y, 0, 0, NULL);
+                        }
+            
+                        // Send a FINISH message to the taxi after completing the route
+                        //printf("Control Center: Sending FINISH to Taxi ID %d.\n", msg->extra_x);
+                        enqueue_message(&taxi->queue, FINISH, 0, 0, 0, 0, NULL);
+                    } else {
+                        printf("Control Center: Taxi ID %d not found.\n", msg->extra_x);
+                    }
+                
+                    // Free the PathData structure
+                    free(path_data->solucaoX);
+                    free(path_data->solucaoY);
+                    free(path_data);
+                } else {
+                    printf("Control Center: No path data received.\n");
+                }
+            
+                break;
+            }
+
             case EXIT_PROGRAM:
                 pthread_mutex_lock(&center->lock);
 
-                // Send EXIT message to all taxis
+                // Send EXIT message to all taxis with priority
                 printf("Sending EXIT message to all taxis.\n");
                 for (int i = 0; i < center->numTaxis; i++) {
                     Taxi* taxi = center->taxis[i];
                     if (taxi != NULL) {
-                        enqueue_message(&taxi->queue, EXIT, 1, 0, 0, 0, NULL);
+                        priority_enqueue_message(&taxi->queue, EXIT, 1, 0, 0, 0, NULL);
                     }
                 }
-            
+
                 // Wait for all taxi threads to terminate
                 for (int i = 0; i < center->numTaxis; i++) {
                     Taxi* taxi = center->taxis[i];
                     if (taxi != NULL) {
                         pthread_join(taxi->thread_id, NULL);
-            
+
                         // Clean up the taxi
                         pthread_mutex_destroy(&taxi->lock);
                         cleanup_queue(&taxi->queue);
                         free(taxi);
                     }
                 }
-            
+
                 center->numTaxis = 0; // Reset the taxi count
-            
+
                 // Send EXIT message to the visualizer thread
                 enqueue_message(visualizerQueue, EXIT, 0, 0, 0, 0, NULL);
                 pthread_mutex_unlock(&center->lock);
-            
+
                 printf("Exiting control center thread.\n");
                 free(msg);
                 return NULL;
@@ -1031,7 +1115,7 @@ void* control_center_thread(void* arg) {
 
 // Visualizer thread
 void* visualizador_thread(void* arg) {
-    InitVisualizer* visualizer = (InitVisualizer*)arg;
+    Visualizer* visualizer = (Visualizer*)arg;
 
     // Create the map
     Mapa* mapa = criarMapa();
@@ -1050,54 +1134,48 @@ void* visualizador_thread(void* arg) {
 
         switch (msg->type) {
             case RANDOM_REQUEST: {
-                printf("Visualizer: Received RANDOM_REQUEST from Taxi ID %d at position (%d, %d).\n",
-                       msg->extra_x, msg->data_x, msg->data_y);
-            
+                //printf("Visualizer: Received RANDOM_REQUEST from Taxi ID %d at position (%d, %d).\n", msg->extra_x, msg->data_x, msg->data_y);
+
                 // Save the taxi's current position and ID
                 int taxi_x = msg->data_x;
                 int taxi_y = msg->data_y;
                 int taxi_id = msg->extra_x;
-            
+
                 // Find a random free point on the map
                 int random_x, random_y;
                 if (!find_random_free_point(mapa, &random_x, &random_y)) {
                     printf("Visualizer: Could not find a random free point for Taxi ID %d.\n", taxi_id);
                     break;
                 }
-                printf("Visualizer: Found random point at (%d, %d) for Taxi ID %d.\n", random_x, random_y, taxi_id);
-            
+                //printf("Visualizer: Found random point at (%d, %d) for Taxi ID %d.\n", random_x, random_y, taxi_id);
+
                 // Create vectors to store the solution path
-                int solucaoX[10000], solucaoY[10000];
+                int* solucaoX = malloc(10000 * sizeof(int));
+                int* solucaoY = malloc(10000 * sizeof(int));
                 int tamanho_solucao = 0;
-            
+
                 // Find the path using encontrarCaminhoCoordenadas
                 if (encontraCaminhoCoordenadas(taxi_x, taxi_y, random_x, random_y, mapa->matriz, mapa->colunas, mapa->linhas,
                                                solucaoX, solucaoY, &tamanho_solucao) == 0) {
-                    printf("Visualizer: Path found for Taxi ID %d. Path length: %d\n", taxi_id, tamanho_solucao);
-            
-                    // Print the path for debugging
-                    printf("Visualizer: Path for Taxi ID %d:\n", taxi_id);
-                    for (int i = 0; i < tamanho_solucao; i++) {
-                        printf("(%d, %d) ", solucaoX[i], solucaoY[i]);
-                    }
-                    printf("\n");
+                    //printf("Visualizer: Path found for Taxi ID %d. Path length: %d\n", taxi_id, tamanho_solucao);
+
+                    // Allocate and populate the PathData structure
+                    PathData* path_data = malloc(sizeof(PathData));
+                    path_data->solucaoX = solucaoX;
+                    path_data->solucaoY = solucaoY;
+                    path_data->tamanho_solucao = tamanho_solucao;
+
+                    // Send the ROUTE_PLAN message to the control center
+                    enqueue_message(visualizer->control_queue, ROUTE_PLAN, taxi_x, taxi_y, taxi_id, 0, path_data);
+                    //printf("Visualizer: Sent ROUTE_PLAN to control center for Taxi ID %d.\n", taxi_id);
                 } else {
                     printf("Visualizer: Pathfinding failed for Taxi ID %d.\n", taxi_id);
+                    free(solucaoX);
+                    free(solucaoY);
                 }
-            
+
                 break;
             }
-            // case PATHFIND_REQUEST: {
-            //     int solucaoX[10000], solucaoY[10000], tamanho_solucao = 0;
-            //     if (encontraCaminho(msg->data_x, msg->data_y, mapa->matriz, mapa->colunas, mapa->linhas,
-            //                         solucaoX, solucaoY, &tamanho_solucao) == 0) {
-            //         //marcarCaminho(mapa->matriz, solucaoX, solucaoY, tamanho_solucao);
-            //         imprimirMapaLogico(mapa); // Prints the map after marking the path
-            //     } else {
-            //         printf("Pathfinding failed.\n");
-            //     }
-            //     break;
-            // }
 
             case CREATE_PASSENGER: {
                 printf("Adding a passenger.\n");
@@ -1256,6 +1334,22 @@ void* taxi_thread(void* arg) {
             
                 break;
             
+            case MOVE_TO: 
+                printf("Taxi %d received MOVE_TO: Move to (%d, %d).\n", taxi->id, msg->data_x, msg->data_y);
+                
+                usleep(1000000); 
+                
+                pthread_mutex_lock(&taxi->lock);
+                int old_x = taxi->x;
+                int old_y = taxi->y;
+                taxi->x = msg->data_x;
+                taxi->y = msg->data_y;
+                pthread_mutex_unlock(&taxi->lock);
+                
+                enqueue_message(taxi->visualizerQueue, MOVE_TO, old_x, old_y, msg->data_x, msg->data_y, NULL);
+                
+                break;
+                              
             case FINISH:
                 printf("Taxi %d received FINISH command. Reporting to control center.\n", taxi->id);
 
@@ -1313,17 +1407,14 @@ void init_operations() {
     }
 
     // Initialize the visualizer
-    // int numQuadrados;
-    // int larguraRua;
-    // int larguraBorda;
-    // int minTamanho;
-    // int maxTamanho;
-    // int distanciaMinima;
-    InitVisualizer visualizer = {10, 2, 2, 5, 13, 2};
+    Visualizer visualizer = {10, 2, 2, 5, 13, 2};
     init_queue(&visualizer.queue);
 
     // Link the visualizer queue to the control center
     center.visualizerQueue = &visualizer.queue;
+
+    // Link the control queue to the visualizer
+    visualizer.control_queue = &center.queue;
 
     // Create threads
     pthread_t inputThread, controlCenterThread, visualizerThread;
