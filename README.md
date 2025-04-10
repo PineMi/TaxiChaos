@@ -1,11 +1,55 @@
+Desenvolvido por: 
+Miguel Coratolo Simões Piñeiro
+Gabriel Erick Mendes
+Bruno Germanetti Ramalho
+Camila Nunes Carniel
+Mateus Teles Magalhães
 
-Falta:
-- COLOCAR O NOME DA GALERA
-- Print das threads (Se for encarar essa, é so criar 2 funçĩoes uma que transforma o tipo de mensagem em simbolo "MOVE_TO -> [MOV] e outra que vai iterar sobre os messageQueues printando) Pode rodar as 2 com o Render
-- Modularização
-- Menu para alterar as configurações da simulação
+Bem-vindo ao nosso simulador de táxis construído em C! Esse projeto simula um sistema dinâmico de táxis com:
 
-- Extra:
-- Fazer um readme maneiro
-- Regularização do Código, revisão de redundâncias.. etc
+-Múltiplos táxis autônomos
+
+-Passageiros com destinos
+
+-Algoritmos de busca de caminho
+
+-Visualização em tempo real no terminal
+
+- Centro de Controle de Taxis
+
+- Controles interativos
+
+🌟 Funcionalidades
+✅ Geração Dinâmica de Mapas - Cidade gerada proceduralmente com ruas (MST) e prédios
+✅ Simulação Multi-thread - Cada táxi roda em sua própria thread
+✅ Busca em Largura (BFS) - Táxis navegam usando BFS
+✅ Controles Interativos - Adicione/remova táxis, passageiros, pause/retome
+✅ Visualização no Terminal - Interface colorida com emojis
+
+🕹️ Controles
+Tecla	Ação
+↑       Adiciona um táxi novo
+↓       Remove um táxi
+P       Adiciona um passageiro
+R	    Reinicia a simulação
+Espaço  Pausa/Continua
+L       Mostra mapa lógico
+Q       Sai do programa
+
+🚀 Como Executar
+
+Encorajamos você a brincar com as definições inicias do main.c para testar diferentes configurações.
+
+Em terminal bash:
+gcc taxi_simulator.c -o taxi_simulator -lpthread -lncurses
+./taxi_simulator
+
+📊 Detalhes Técnicos
+Threads: Usa pthread para operações concorrentes dos táxis
+
+Pathfinding: Algoritmo BFS para planejamento de rotas e MST para criação de Ruas
+
+Entrada/Saída: Input não-bloqueante com termios
+
+Visualização: Renderização com emojis
 

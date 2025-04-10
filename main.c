@@ -44,6 +44,13 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
+#define NUM_SQUARES 10
+#define ROAD_WIDTH 2
+#define BORDER_WIDTH 2
+#define MIN_SIZE 5
+#define MAX_SIZE 13
+#define MIN_DISTANCE 2
+
 #define MAX_ATTEMPTS 1000
 #define TAXI_REFRESH_RATE 100000
 #define TAXI_SPEED_FACTOR 5
@@ -1911,7 +1918,14 @@ void init_operations() {
     }
 
     // Initialize the visualizer
-    Visualizer visualizer = {10, 2, 2, 5, 13, 2};
+    int numSquares = NUM_SQUARES;
+    int roadWidth = ROAD_WIDTH;
+    int borderWidth = BORDER_WIDTH;
+    int minSize = MIN_SIZE;
+    int maxSize = MAX_SIZE;
+    int minDistance = MIN_DISTANCE;
+
+    Visualizer visualizer = {numSquares, roadWidth, borderWidth, minSize, maxSize, minDistance};
     init_queue(&visualizer.queue);
 
     // Link the visualizer queue to the control center
