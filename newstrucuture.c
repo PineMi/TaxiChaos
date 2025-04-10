@@ -1224,8 +1224,20 @@ void* control_center_thread(void* arg) {
                     center->taxis[i] = NULL;
                 }
 
+                // Reset the passenger array and counter
+                for (int i = 0; i < center->numPassengers; i++) {
+                    Passenger* passenger = center->passengers[i];
+                    if (passenger != NULL) {
+                        free(passenger);
+                    }
+                }
+                center->numPassengers = 0;
+                for (int i = 0; i < MAX_PASSENGERS; i++) {
+                    center->passengers[i] = NULL;
+                }
                 pthread_mutex_unlock(&center->lock);
 
+                
                 // Forward the RESET_MAP command to the visualizer
                 enqueue_message(visualizerQueue, RESET_MAP, 0, 0, 0, 0, NULL);
                 break;
@@ -1422,6 +1434,17 @@ void* control_center_thread(void* arg) {
 
                 center->numTaxis = 0; // Reset the taxi count
 
+                // Reset the passenger array and counter
+                for (int i = 0; i < center->numPassengers; i++) {
+                    Passenger* passenger = center->passengers[i];
+                    if (passenger != NULL) {
+                        free(passenger);
+                    }
+                }
+                center->numPassengers = 0;
+                for (int i = 0; i < MAX_PASSENGERS; i++) {
+                    center->passengers[i] = NULL;
+                }
                 // Send EXIT message to the visualizer thread
                 enqueue_message(visualizerQueue, EXIT, 0, 0, 0, 0, NULL);
                 pthread_mutex_unlock(&center->lock);
@@ -2042,7 +2065,7 @@ void init_operations() {
     pthread_join(controlCenterThread, NULL);
     pthread_join(visualizerThread, NULL);
     pthread_cancel(timerThread);
-
+    pthread_join(timerThread, NULL); // Wait for the timer thread to finish
 
     // Clean up
     pthread_mutex_destroy(&center.lock);
@@ -2050,7 +2073,11 @@ void init_operations() {
     pthread_cond_destroy(&center.queue.cond);
     pthread_mutex_destroy(&visualizer.queue.lock);
     pthread_cond_destroy(&visualizer.queue.cond);
+    cleanup_queue(&center.queue);
+    cleanup_queue(&visualizer.queue);
+
     printf("Program terminated.\n");
+
 }
 
 int main() {
