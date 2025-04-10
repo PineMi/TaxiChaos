@@ -1,10 +1,9 @@
 Falta:
-- Print das threads, já fiz, só falta inserir.
+- Print das threads (Se for encarar essa, é so criar 2 funçĩoes uma que transforma o tipo de mensagem em simbolo "MOVE_TO -> [MOV] e outra que vai iterar sobre os messageQueues printando) Pode rodar as 2 com o Render
 - Modularização
-- Regularização do Código, revisão de redundâncias.. etc
-- Remover/Adicionar comentários
-- Padronizar em uma única lingua
 - Menu para alterar as configurações da simulação
 
 - Extra:
 - Fazer um readme maneiro
+- Regularização do Código, revisão de redundâncias.. etc
+
