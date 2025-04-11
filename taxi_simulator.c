@@ -230,7 +230,7 @@ bool find_random_free_point(Map* map, int* random_x, int* random_y);
 const char* message_type_to_abbreviation(MessageType type);
 
 
-// -------------------- QUEUE FUNCTIONS --------------------
+// -------------------- QUEUE FUNCTIONS ---------------------
 
 // Initialize the queue
 void init_queue(MessageQueue* queue) {
