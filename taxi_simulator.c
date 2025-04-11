@@ -89,10 +89,11 @@
 
 #define MAX_TAXIS 6
 
-// Global variables for pause/resume functionality
+// Global variables for pause/resume functionality and logging
 pthread_mutex_t pause_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t pause_cond = PTHREAD_COND_INITIALIZER;
 bool isPaused = false;
+FILE* log_file = NULL;
 
 // -------------------- STRUCTURES --------------------
 
@@ -226,6 +227,8 @@ void init_operations();
 void renderMap(Map* map, ControlCenter* center, Visualizer* visualizer);
 pthread_t create_taxi_thread(Taxi* taxi);
 bool find_random_free_point(Map* map, int* random_x, int* random_y);
+const char* message_type_to_abbreviation(MessageType type);
+
 
 // -------------------- QUEUE FUNCTIONS --------------------
 
@@ -257,6 +260,15 @@ void enqueue_message(MessageQueue* queue, MessageType type, int x, int y, int ex
     }
     pthread_cond_signal(&queue->cond);
     pthread_mutex_unlock(&queue->lock);
+
+    // Log the message
+    if (log_file) {
+        pthread_mutex_lock(&pause_mutex); // Ensure thread-safe logging
+        fprintf(log_file, "Enqueued Message: Type=%s, DataX=%d, DataY=%d, ExtraX=%d, ExtraY=%d\n",
+                message_type_to_abbreviation(type), x, y, extra_x, extra_y);
+        fflush(log_file); // Ensure the log is written immediately
+        pthread_mutex_unlock(&pause_mutex);
+    }
 }
 
 // Priority enqueue a message
@@ -282,6 +294,14 @@ void priority_enqueue_message(MessageQueue* queue, MessageType type, int x, int 
 
     pthread_cond_signal(&queue->cond);
     pthread_mutex_unlock(&queue->lock);
+
+    if (log_file) {
+        pthread_mutex_lock(&pause_mutex); // Ensure thread-safe logging
+        fprintf(log_file, "Enqueued Message: Type=%s, DataX=%d, DataY=%d, ExtraX=%d, ExtraY=%d\n",
+                message_type_to_abbreviation(type), x, y, extra_x, extra_y);
+        fflush(log_file); // Ensure the log is written immediately
+        pthread_mutex_unlock(&pause_mutex);
+    }
 }
 
 // Dequeue a message
@@ -1969,6 +1989,11 @@ pthread_t create_taxi_thread(Taxi* taxi) {
 // -------------------- MAIN FUNCTION --------------------
 
 void init_operations() {
+    log_file = fopen("operation_log.txt", "w");
+    if (!log_file) {
+        perror("Failed to open log file");
+        exit(EXIT_FAILURE);
+    }
     // Initialize the control center
     ControlCenter center;
     center.numPassengers = 0;
@@ -2020,7 +2045,11 @@ void init_operations() {
     pthread_cond_destroy(&visualizer.queue.cond);
     cleanup_queue(&center.queue);
     cleanup_queue(&visualizer.queue);
-
+    
+    // Close the log file
+    if (log_file) {
+        fclose(log_file);
+    }
 }
 
 int main() {
