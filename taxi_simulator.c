@@ -84,7 +84,7 @@
 #define TAXI_EMOJI "🚖"
 #define PASSENGER_POINT_EMOJI "🔲"
 
-#define MAP_VERTICAL_PROPORTION 0.8
+#define MAP_VERTICAL_PROPORTION 0.6
 #define MAP_HORIZONTAL_PROPORTION 0.5
 
 #define MAX_TAXIS 6
@@ -215,6 +215,7 @@ typedef struct {
     int minDistance;
     MessageQueue queue;
     MessageQueue* control_queue;
+    ControlCenter* center;
 } Visualizer;
 
 // Function prototypes
@@ -222,7 +223,7 @@ static void drawSquare(Map* map, Square q, int borderWidth);
 static void connectSquaresMST(Map* map, Square* squares, int num_squares);
 static void findConnectionPoints(Square a, Square b, int* px1, int* py1, int* px2, int* py2);
 void init_operations();
-void renderMap(Map* map);
+void renderMap(Map* map, ControlCenter* center, Visualizer* visualizer);
 pthread_t create_taxi_thread(Taxi* taxi);
 bool find_random_free_point(Map* map, int* random_x, int* random_y);
 
@@ -439,12 +440,67 @@ void printLogicalMap(Map* map) {
     }
 }
 
-// Render the map with emojis
-void renderMap(Map* map) {
+const char* message_type_to_abbreviation(MessageType type) {
+    switch (type) {
+        case CREATE_PASSENGER: return "[CP]";
+        case DELETE_PASSENGER: return "[DP]";
+        case RESET_MAP: return "[RM]";
+        case EXIT_PROGRAM: return "[EP]";
+        case PATHFIND_REQUEST: return "[PFR]";
+        case RANDOM_REQUEST: return "[RR]";
+        case ROUTE_PLAN: return "[RP]";
+        case EXIT: return "[EX]";
+        case STATUS_REQUEST: return "[SR]";
+        case CREATE_TAXI: return "[CT]";
+        case DESTROY_TAXI: return "[DT]";
+        case SPAWN_TAXI: return "[ST]";
+        case MOVE_TO: return "[MOV]";
+        case FINISH: return "[FIN]";
+        case PRINT_LOGICO: return "[PL]";
+        case DROP: return "[DRP]";
+        case GOT_PASSENGER: return "[GP]";
+        case ARRIVED_AT_DESTINATION: return "[AD]";
+        case REFRESH_PASSENGERS: return "[RPAS]";
+        default: return "[UNK]";
+    }
+}
+
+void print_message_queue(const char* thread_name, MessageQueue* queue) {
+    pthread_mutex_lock(&queue->lock);
+
+    printf("Thread %s:\n", thread_name);
+
+    Message* current = queue->head;
+    int count = 0;
+    int remaining = 0;
+
+    while (current) {
+        if (count < 6) {
+            printf("%s", message_type_to_abbreviation(current->type));
+        } else {
+            remaining++;
+        }
+        current = current->next;
+        count++;
+    }
+
+    if (count > 6) {
+        printf(" + %d", remaining);
+    } else if (count == 0) {
+        printf("[EMPTY]");
+    }
+
+    printf("\n---------------------------------------\n");
+
+    pthread_mutex_unlock(&queue->lock);
+}
+
+void renderMap(Map* map, ControlCenter* center, Visualizer* visualizer) {
     if (!map || !map->matrix) {
         return;
     }
-    printf("\033[H\033[J");
+
+    printf("\033[H\033[J"); 
     for (int i = 0; i < map->rows; i++) {
         for (int j = 0; j < map->cols; j++) {
             switch (map->matrix[i][j]) {
@@ -477,14 +533,21 @@ void renderMap(Map* map) {
                         break;
                     }
                     if (map->matrix[i][j] >= R_PASSENGER_DEST && map->matrix[i][j] < R_PASSENGER_DEST + 100) {
-                        printf(DESTINATION_EMOJI); // Empty space
+                        printf(DESTINATION_EMOJI);
                         break;
                     }
-                    printf("?"); // Empty space
+                    printf("?"); 
                     break;
             }
         }
         printf("\n");
+    }
+
+    printf("\n--- Message Queues ---\n");
+    print_message_queue("ControlCenter", &center->queue);
+    print_message_queue("Visualizer", &visualizer->queue);
+    if (center->numTaxis > 0 && center->taxis[0]) {
+        print_message_queue("Taxi 1", &center->taxis[0]->queue);
     }
 }
 
@@ -1410,7 +1473,7 @@ void* visualizer_thread(void* arg) {
 
     // Print the map after generation
     printLogicalMap(map);
-    renderMap(map); // TODO: DEIXAR APENAS O RENDER DEPOIS
+    renderMap(map, visualizer->center, visualizer); // TODO: DEIXAR APENAS O RENDER DEPOIS
     while (1) {
         // Dequeue a message
         Message* msg = dequeue_message(&visualizer->queue);
@@ -1520,7 +1583,7 @@ void* visualizer_thread(void* arg) {
                 }
             
                 // Render the updated map
-                renderMap(map);
+                renderMap(map, visualizer->center, visualizer);
             
                 // Find a free taxi for the passenger
                 int* solutionX = malloc(10000 * sizeof(int));
@@ -1571,7 +1634,7 @@ void* visualizer_thread(void* arg) {
 
                 // Print the new map
                 printLogicalMap(map);
-                renderMap(map);
+                renderMap(map, visualizer->center, visualizer);
                 break;
             }
             
@@ -1615,7 +1678,7 @@ void* visualizer_thread(void* arg) {
                         map->matrix[msg->data_y][msg->data_x] = ROAD; // Clear the old position
                         pthread_mutex_unlock(&map->lock);
                     }
-                    renderMap(map);
+                    renderMap(map, visualizer->center, visualizer);
                     break;
                 }
                 
@@ -1633,7 +1696,7 @@ void* visualizer_thread(void* arg) {
 
 
                 // Render the updated map
-                renderMap(map);
+                renderMap(map, visualizer->center, visualizer);
                 break;
             }
 
@@ -1756,7 +1819,7 @@ void* visualizer_thread(void* arg) {
                 //map->matrix[road_y][road_x] = ROAD;        // Clear the ROAD position
                 pthread_mutex_unlock(&map->lock); 
                 // Render the updated map
-                renderMap(map);
+                renderMap(map, visualizer->center, visualizer);
                 break;
             }
             case PRINT_LOGICO:
@@ -1926,6 +1989,7 @@ void init_operations() {
     int minDistance = MIN_DISTANCE;
 
     Visualizer visualizer = {numSquares, roadWidth, borderWidth, minSize, maxSize, minDistance};
+    visualizer.center = &center;
     init_queue(&visualizer.queue);
 
     // Link the visualizer queue to the control center
