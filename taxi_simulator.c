@@ -9,6 +9,40 @@
  * 
  */
 
+/**
+ * TAXI SIMULATOR - OVERVIEW
+ * 
+ * This program simulates a taxi service in a dynamically generated city map. The system includes:
+ * - A visual city map with roads, buildings, and sidewalks
+ * - Taxis that navigate the city to pick up and drop off passengers
+ * - Passengers with random origins and destinations
+ * - A control center that coordinates all entities
+ * 
+ * MAIN COMPONENTS:
+ * 1. Map Generation:
+ *    - Creates a city map with buildings and connecting roads
+ *    - Uses Minimum Spanning Tree algorithm for road connections
+ *    - Supports dynamic resizing based on terminal dimensions
+ * 
+ * 2. Entity System:
+ *    - Taxis: Can be created/destroyed dynamically, navigate using pathfinding
+ *    - Passengers: Spawn at random locations, request taxis, and have destinations
+ *    - Control Center: Manages all entities and coordinates communication
+ * 
+ * 3. Pathfinding:
+ *    - Uses BFS algorithm to find routes between points
+ *    - Handles taxi-to-passenger and passenger-to-destination routes
+ * 
+ * 4. Threading System:
+ *    - Separate threads for input, visualization, control, and each taxi
+ *    - Message queues for inter-thread communication
+ *    - Pause/resume functionality
+ * 
+ * 5. Visualization:
+ *    - Real-time display of the map using emoji characters
+ *    - Shows entity positions and status messages
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -97,26 +131,69 @@ FILE* log_file = NULL;
 
 // -------------------- STRUCTURES --------------------
 
-// Node for BFS
+/**
+ * Node structure for BFS pathfinding algorithm
+ * 
+ * Represents a single node in the pathfinding grid with:
+ * @param x: X-coordinate (column) in the map matrix
+ * @param y: Y-coordinate (row) in the map matrix
+ * @param parent_index: Index of parent node in BFS queue
+ *                       (-1 indicates no parent/starting node)
+ */
+
 typedef struct {
     int x;
     int y;
     int parent_index;
 } Node;
 
-// Square structure
+/**
+ * Square structure for map generation
+ * 
+ * Represents a building block in the city map with:
+ * @param x: Top-left X coordinate of the square
+ * @param y: Top-left Y coordinate of the square
+ * @param size: Width/height of the square (squares are always equal width/height)
+ */
+
 typedef struct {
     int x, y;
     int size;
 } Square;
 
-// Map structure
+/**
+ * Map structure containing city layout
+ * 
+ * Represents the entire city map with:
+ * @param rows: Number of rows in the matrix
+ * @param cols: Number of columns in the matrix
+ * @param road_width: Width of roads in cells
+ * @param matrix: 2D array representing map cells
+ * @param lock: Mutex for thread-safe map access
+ */
+
 typedef struct {
     int rows, cols;
     int road_width;
     int **matrix;
     pthread_mutex_t lock; 
 } Map;
+
+/**
+ * Passenger structure representing a taxi customer
+ * 
+ * Contains all information about a passenger including:
+ * @param id: Unique passenger identifier
+ * @param x_sidewalk: X coordinate of sidewalk pickup point
+ * @param y_sidewalk: Y coordinate of sidewalk pickup point
+ * @param x_road: X coordinate of adjacent road pickup point
+ * @param y_road: Y coordinate of adjacent road pickup point
+ * @param isFree: Status flag (unused in current implementation)
+ * @param x_sidewalk_dest: X coordinate of sidewalk destination
+ * @param y_sidewalk_dest: Y coordinate of sidewalk destination
+ * @param x_road_dest: X coordinate of adjacent road destination
+ * @param y_road_dest: Y coordinate of adjacent road destination
+ */
 
 typedef struct {
     int id;
@@ -155,7 +232,19 @@ typedef enum {
     
 } MessageType;
 
-// Message structure
+/**
+ * Message structure for inter-thread communication
+ * 
+ * Used in message queues to pass commands between threads with:
+ * @param type: Type of message (from MessageType enum)
+ * @param next: Pointer to next message in queue
+ * @param data_x: Primary X coordinate data
+ * @param data_y: Primary Y coordinate data
+ * @param extra_x: Secondary X coordinate or ID data
+ * @param extra_y: Secondary Y coordinate or flags
+ * @param pointer: Generic pointer for additional data
+ */
+
 typedef struct Message {
     MessageType type;
     struct Message* next;
@@ -166,7 +255,16 @@ typedef struct Message {
     void* pointer;
 } Message;
 
-// Message queue structure
+/**
+ * Message queue structure for thread communication
+ * 
+ * Thread-safe FIFO queue implementation with:
+ * @param head: Pointer to first message in queue
+ * @param tail: Pointer to last message in queue
+ * @param lock: Mutex for thread-safe operations
+ * @param cond: Condition variable for blocking dequeue
+ */
+
 typedef struct {
     Message* head;
     Message* tail;
@@ -174,13 +272,39 @@ typedef struct {
     pthread_cond_t cond;
 } MessageQueue;
 
+/**
+ * Path data structure for storing navigation solutions
+ * 
+ * Contains computed path information with:
+ * @param solucaoX: Array of X coordinates in path
+ * @param solucaoY: Array of Y coordinates in path
+ * @param tamanho_solucao: Number of points in path
+ */
+
 typedef struct {
     int* solucaoX;         
     int* solucaoY;         
     int tamanho_solucao;   
 } PathData;
 
-// Taxi structure
+/**
+ * Taxi structure representing a taxi vehicle
+ * 
+ * Contains all taxi state information including:
+ * @param id: Unique taxi identifier
+ * @param x: Current X position
+ * @param y: Current Y position
+ * @param isFree: Availability status (true if available)
+ * @param currentPassenger: ID of assigned passenger (-1 if none)
+ * @param queue: Message queue for receiving commands
+ * @param lock: Mutex for thread-safe operations
+ * @param control_queue: Pointer to control center's queue
+ * @param visualizerQueue: Pointer to visualizer's queue
+ * @param thread_id: POSIX thread identifier
+ * @param drop_cond: Condition variable for drop synchronization
+ * @param drop_processed: Flag indicating drop completion
+ */
+
 typedef struct {
     int id;
     int x, y;
@@ -195,7 +319,19 @@ typedef struct {
     bool drop_processed; 
 } Taxi;
 
-// Control center structure
+/**
+ * Control center structure for system coordination
+ * 
+ * Central management point containing:
+ * @param numPassengers: Current passenger count
+ * @param lock: Mutex for thread-safe operations
+ * @param queue: Message queue for receiving commands
+ * @param visualizerQueue: Pointer to visualizer's queue
+ * @param taxis: Array of pointers to active taxis
+ * @param numTaxis: Current taxi count
+ * @param passengers: Array of pointers to active passengers
+ */
+
 typedef struct {
     int numPassengers;
     pthread_mutex_t lock;
@@ -206,7 +342,21 @@ typedef struct {
     Passenger* passengers[MAX_PASSENGERS]; 
 } ControlCenter;
 
-// Visualizer structure
+/**
+ * Visualizer structure for map rendering
+ * 
+ * Contains visualization parameters and state with:
+ * @param numSquares: Number of buildings in map
+ * @param roadWidth: Width of roads in cells
+ * @param borderWidth: Width of building borders
+ * @param minSize: Minimum building size
+ * @param maxSize: Maximum building size
+ * @param minDistance: Minimum distance between buildings
+ * @param queue: Message queue for receiving commands
+ * @param control_queue: Pointer to control center's queue
+ * @param center: Pointer to control center structure
+ */
+
 typedef struct {
     int numSquares;
     int roadWidth;
@@ -341,7 +491,19 @@ void cleanup_queue(MessageQueue* queue) {
 
 // -------------------- MAP FUNCTIONS --------------------
 
-// Create a new map
+/**
+ * Creates a new map structure based on terminal dimensions
+ * 
+ * Dynamically allocates and initializes a map structure by:
+ * - Getting terminal dimensions using ioctl
+ * - Scaling dimensions by MAP_VERTICAL_PROPORTION and MAP_HORIZONTAL_PROPORTION
+ * - Allocating matrix memory
+ * - Initializing all cells to SIDEWALK (1)
+ * 
+ * @return Pointer to newly created Map structure
+ * @note Returns NULL if terminal dimensions cannot be obtained
+ */
+
 Map* createMap() {
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) {
@@ -368,7 +530,18 @@ Map* createMap() {
     return map;
 }
 
-// Free the map
+/**
+ * Frees all memory associated with a map
+ * 
+ * Safely deallocates map resources by:
+ * - Freeing each row of the matrix
+ * - Freeing the matrix pointer array
+ * - Freeing the map structure itself
+ * 
+ * @param map Pointer to Map structure to deallocate
+ * @note Handles NULL pointer safely
+ */
+
 void freeMap(Map* map) {
     if (!map) return;
 
@@ -379,7 +552,26 @@ void freeMap(Map* map) {
     free(map);
 }
 
-// Generate the map
+/**
+ * Generates a city map with buildings and roads
+ * 
+ * Creates a procedural city layout by:
+ * 1. Clearing existing map (setting all cells to SIDEWALK)
+ * 2. Generating random building squares with:
+ *    - Random positions and sizes within min/max constraints
+ *    - Minimum distance between buildings
+ *    - Border roads around each building
+ * 3. Connecting buildings with roads using MST algorithm
+ * 
+ * @param map Pointer to Map structure to generate
+ * @param num_squares Number of buildings to generate
+ * @param road_width Width of roads in cells
+ * @param border_width Width of building borders
+ * @param min_size Minimum building dimension
+ * @param max_size Maximum building dimension
+ * @param min_distance Minimum spacing between buildings
+ */
+
 void generateMap(Map* map, int num_squares, int road_width, int border_width, int min_size, int max_size, int min_distance) {
     map->road_width = road_width;
     srand(time(NULL));
@@ -450,7 +642,16 @@ void generateMap(Map* map, int num_squares, int road_width, int border_width, in
     }
 }
 
-// Print the map
+/**
+ * Prints the raw numerical representation of the map
+ * 
+ * Debug function that displays:
+ * - Each cell's numerical value
+ * - Matrix layout with rows and columns
+ * 
+ * @param map Pointer to Map structure to display
+ */
+
 void printLogicalMap(Map* map) {
     for (int i = 0; i < map->rows; i++) {
         for (int j = 0; j < map->cols; j++) {
@@ -571,7 +772,27 @@ void renderMap(Map* map, ControlCenter* center, Visualizer* visualizer) {
     }
 }
 
-// Find path in the map
+/**
+ * Finds a path between two points using BFS algorithm
+ * 
+ * Calculates shortest path through road network by:
+ * 1. Initializing BFS queue and visited matrix
+ * 2. Exploring neighbors (up/down/left/right)
+ * 3. Tracking parent nodes to reconstruct path
+ * 4. Handling special destination ranges (100-599)
+ * 
+ * @param start_col Starting X coordinate
+ * @param start_row Starting Y coordinate
+ * @param maze The map matrix to navigate
+ * @param num_cols Width of map
+ * @param num_rows Height of map
+ * @param solutionCol Output array for path X coordinates
+ * @param solutionRow Output array for path Y coordinates
+ * @param solution_size Output pointer for path length
+ * @param destination Target value range (e.g., R_TAXI_FREE)
+ * @return 0 on success, 1 if no path found
+ */
+
 int findPath(int start_col, int start_row, int **maze, int num_cols, int num_rows,
                     int solutionCol[], int solutionRow[], int *solution_size, int destination) {
     // BFS queue
@@ -651,7 +872,25 @@ int findPath(int start_col, int start_row, int **maze, int num_cols, int num_row
     return 1;
 }
 
-// Find path with specific coordinates
+/**
+ * Finds path between specific coordinates using BFS
+ * 
+ * Specialized version of findPath that navigates to exact coordinates
+ * rather than destination ranges. Used for taxi-passenger routing.
+ * 
+ * @param start_col Starting X coordinate
+ * @param start_row Starting Y coordinate
+ * @param dest_col Destination X coordinate
+ * @param dest_row Destination Y coordinate
+ * @param maze The map matrix to navigate
+ * @param num_cols Width of map
+ * @param num_rows Height of map
+ * @param solutionCol Output array for path X coordinates
+ * @param solutionRow Output array for path Y coordinates
+ * @param solution_size Output pointer for path length
+ * @return 0 on success, 1 if no path found
+ */
+
 int findPathCoordinates(int start_col, int start_row, int dest_col, int dest_row,
                                int **maze, int num_cols, int num_rows,
                                int solutionCol[], int solutionRow[], int *solution_size) {
@@ -732,7 +971,20 @@ int findPathCoordinates(int start_col, int start_row, int dest_col, int dest_row
     return 1;
 }
 
-// Mark the path on the map
+/**
+ * Marks a calculated path on the map matrix
+ * 
+ * Annotates the path with directional markers (→, ←, ↑, ↓) by:
+ * - Analyzing each step's direction
+ * - Setting appropriate directional constants
+ * - Preserving destination marker
+ * 
+ * @param maze The map matrix to annotate
+ * @param solutionX Array of path X coordinates
+ * @param solutionY Array of path Y coordinates
+ * @param solution_size Length of path
+ */
+
 void markPath(int **maze, int solutionX[], int solutionY[], int solution_size) {
     if (solution_size <= 0 || maze == NULL || solutionX == NULL || solutionY == NULL) {
         return;
@@ -762,7 +1014,19 @@ void markPath(int **maze, int solutionX[], int solutionY[], int solution_size) {
     maze[last_y][last_x] = DESTINATION;
 }
 
-// Draw a square on the map
+/**
+ * Draws a building square on the map with borders
+ * 
+ * Creates a building by:
+ * 1. Drawing top/bottom borders (horizontal roads)
+ * 2. Drawing left/right borders (vertical roads)
+ * 3. Leaving center area as sidewalk (1)
+ * 
+ * @param map Pointer to Map structure
+ * @param q Square parameters (position, size)
+ * @param borderWidth Width of border roads
+ */
+
 static void drawSquare(Map *map, Square q, int borderWidth) {
     // Top: draw the top border
     for (int i = 0; i < borderWidth; i++) {
@@ -795,7 +1059,21 @@ static void drawSquare(Map *map, Square q, int borderWidth) {
     }
 }
 
-// Draw a road on the map
+/**
+ * Draws a road segment between two points
+ * 
+ * Creates either horizontal or vertical road segments with:
+ * - Proper road width handling
+ * - Boundary checking
+ * - Center-aligned road placement
+ * 
+ * @param map Pointer to Map structure
+ * @param x1 Starting X coordinate
+ * @param y1 Starting Y coordinate
+ * @param x2 Ending X coordinate
+ * @param y2 Ending Y coordinate
+ */
+
 static void drawRoad(Map *map, int x1, int y1, int x2, int y2) {
     if (x1 != x2) {
         int step = (x2 > x1) ? 1 : -1;
@@ -822,7 +1100,19 @@ static void drawRoad(Map *map, int x1, int y1, int x2, int y2) {
     }
 }
 
-// Connect squares using MST
+/**
+ * Connects buildings using Minimum Spanning Tree algorithm
+ * 
+ * Creates efficient road network by:
+ * 1. Calculating building center points
+ * 2. Using Prim's algorithm to find MST
+ * 3. Drawing roads between connected buildings
+ * 
+ * @param map Pointer to Map structure
+ * @param squares Array of building squares
+ * @param num_squares Number of buildings
+ */
+
 static void connectSquaresMST(Map *map, Square *squares, int num_squares) {
     if (num_squares <= 0 || squares == NULL) return;
 
@@ -880,6 +1170,20 @@ static void connectSquaresMST(Map *map, Square *squares, int num_squares) {
     free(inMST);
 }
 
+/**
+ * Calculates connection points between two buildings
+ * 
+ * Determines optimal road attachment points by:
+ * - Comparing relative positions (horizontal/vertical dominance)
+ * - Selecting midpoints on appropriate sides
+ * 
+ * @param a First building square
+ * @param b Second building square
+ * @param px1 Output for first point's X
+ * @param py1 Output for first point's Y
+ * @param px2 Output for second point's X
+ * @param py2 Output for second point's Y
+ */
 
 static void findConnectionPoints(Square a, Square b, int *px1, int *py1, int *px2, int *py2)
 {
@@ -912,7 +1216,19 @@ static void findConnectionPoints(Square a, Square b, int *px1, int *py1, int *px
 }
 }
 
-// Finds a random free point on the map
+/**
+ * Finds random accessible point on road network
+ * 
+ * Locates valid spawn points by:
+ * - Random sampling with maximum attempts
+ * - Checking for ROAD (0) cell type
+ * 
+ * @param map Pointer to Map structure
+ * @param random_x Output for found X coordinate
+ * @param random_y Output for found Y coordinate
+ * @return true if valid point found, false otherwise
+ */
+
 bool find_random_free_point(Map* map, int* random_x, int* random_y) {
     const int max_attempts = 1000;
     int attempts = 0;
@@ -934,7 +1250,21 @@ bool find_random_free_point(Map* map, int* random_x, int* random_y) {
     return true;
 }
 
-// Finds a random free point on the map that is adjacent to a SIDEWALK
+/**
+ * Finds road point adjacent to sidewalk
+ * 
+ * Locates passenger pickup/dropoff points by:
+ * - Finding road cells (0) next to sidewalk cells (1)
+ * - Valid for both passenger origins and destinations
+ * 
+ * @param map Pointer to Map structure
+ * @param free_x Output for road X coordinate
+ * @param free_y Output for road Y coordinate
+ * @param sidewalk_x Output for adjacent sidewalk X
+ * @param sidewalk_y Output for adjacent sidewalk Y
+ * @return true if valid point found, false otherwise
+ */
+
 bool find_random_free_point_adjacent_to_sidewalk(Map* map, int* free_x, int* free_y, int* sidewalk_x, int* sidewalk_y) {
     const int max_attempts = MAX_ATTEMPTS;
     int attempts = 0;
@@ -978,6 +1308,18 @@ bool find_random_free_point_adjacent_to_sidewalk(Map* map, int* free_x, int* fre
 
 // -------------------- THREAD FUNCTIONS --------------------
 
+/**
+ * Refreshes passenger positions and re-queues unassigned passengers
+ * 
+ * Periodically called to:
+ * - Check passenger assignment status
+ * - Re-queue passengers not assigned to taxis
+ * - Maintain active passenger visibility
+ * 
+ * @param center Pointer to ControlCenter structure
+ * @note Called by timer thread at REFRESH_PASSENGERS_SEC intervals
+ */
+
 void refresh_passengers(ControlCenter* center) {
     pthread_mutex_lock(&center->lock);
 
@@ -1006,7 +1348,26 @@ void refresh_passengers(ControlCenter* center) {
     pthread_mutex_unlock(&center->lock);
 }
 
-// User input thread
+/**
+ * Handles keyboard input and command generation
+ * 
+ * Runs in dedicated thread to:
+ * - Configure terminal for non-blocking input
+ * - Process arrow keys and character commands
+ * - Generate appropriate messages for:
+ *   * Taxi creation/destruction
+ *   * Passenger creation
+ *   * Map reset
+ *   * Program control
+ * - Restores terminal settings on exit
+ * 
+ * @param arg ControlCenter pointer passed as void*
+ * @return NULL on thread exit
+ * 
+ * @note Uses escape sequence detection for arrow keys
+ * @warning Terminal settings are process-global
+ */
+
 void* input_thread(void* arg) {
     ControlCenter* center = (ControlCenter*)arg;
 
@@ -1087,7 +1448,24 @@ void* input_thread(void* arg) {
     return NULL;
 }
 
-// Control center thread
+/**
+ * Main control center processing thread
+ * 
+ * Acts as system coordinator by:
+ * - Processing messages from input thread
+ * - Managing taxi lifecycle (create/destroy)
+ * - Handling passenger requests
+ * - Routing pathfinding requests
+ * - Coordinating system reset
+ * - Implementing pause functionality
+ * 
+ * @param arg ControlCenter pointer passed as void*
+ * @return NULL on program exit
+ * 
+ * @note Implements core message processing state machine
+ * @warning Holds locks during taxi thread joins
+ */
+
 void* control_center_thread(void* arg) {
     ControlCenter* center = (ControlCenter*)arg;
 
@@ -1479,7 +1857,26 @@ void* control_center_thread(void* arg) {
     return NULL;
 }
 
-// Visualizer thread
+/**
+ * Map visualization and rendering thread
+ * 
+ * Responsible for:
+ * - Map generation and maintenance
+ * - Real-time display rendering
+ * - Processing visual updates from:
+ *   * Taxi movements
+ *   * Passenger spawns
+ *   * Destination markers
+ * - Handling pathfinding requests
+ * - Maintaining logical map consistency
+ * 
+ * @param arg Visualizer pointer passed as void*
+ * @return NULL on program exit
+ * 
+ * @note Uses ANSI escape codes for display control
+ * @warning Map matrix access requires proper locking
+ */
+
 void* visualizer_thread(void* arg) {
     Visualizer* visualizer = (Visualizer*)arg;
 
@@ -1859,7 +2256,25 @@ void* visualizer_thread(void* arg) {
     }
 }
 
-// Taxi Thread
+/**
+ * Taxi behavior and navigation thread
+ * 
+ * Implements taxi agent that:
+ * - Processes movement commands
+ * - Handles passenger pickup/dropoff
+ * - Maintains state (position, availability)
+ * - Communicates with control center
+ * - Implements movement delay based on:
+ *   * TAXI_REFRESH_RATE base speed
+ *   * TAXI_SPEED_FACTOR for occupied taxis
+ * 
+ * @param arg Taxi pointer passed as void*
+ * @return NULL on taxi destruction
+ * 
+ * @note Uses usleep for movement timing
+ * @warning Queue cleanup required on exit
+ */
+
 void* taxi_thread(void* arg) {
     Taxi* taxi = (Taxi*)arg;
 
@@ -1958,7 +2373,21 @@ void* taxi_thread(void* arg) {
     }
 }
 
-// Time Thread
+/**
+ * Periodic timer thread for system events
+ * 
+ * Provides timed events by:
+ * - Triggering passenger refresh at fixed intervals
+ * - Maintaining operation during pause state
+ * - Sleeping between triggers
+ * 
+ * @param arg ControlCenter pointer passed as void*
+ * @return NULL (thread runs indefinitely)
+ * 
+ * @note Uses sleep() for timing
+ * @warning Cancellation point requires cleanup
+ */
+
 void* timer_thread(void* arg) {
     ControlCenter* center = (ControlCenter*)arg;
 
@@ -1976,7 +2405,20 @@ void* timer_thread(void* arg) {
     return NULL;
 }
 
-// Create a taxi thread
+/**
+ * Creates and starts a new taxi thread
+ * 
+ * Wrapper for pthread_create that:
+ * - Initializes thread with taxi context
+ * - Handles creation errors
+ * - Returns thread identifier
+ * 
+ * @param taxi Pointer to initialized Taxi structure
+ * @return pthread_t identifier for new thread
+ * 
+ * @note Exits program on thread creation failure
+ */
+
 pthread_t create_taxi_thread(Taxi* taxi) {
     pthread_t thread;
     if (pthread_create(&thread, NULL, taxi_thread, taxi) != 0) {
@@ -1987,6 +2429,34 @@ pthread_t create_taxi_thread(Taxi* taxi) {
 
 
 // -------------------- MAIN FUNCTION --------------------
+
+/**
+ * Initializes and starts the entire taxi simulator system
+ * 
+ * Performs complete system setup by:
+ * 1. Opening log file for operation tracking
+ * 2. Initializing control center with:
+ *    - Passenger/taxi counters
+ *    - Mutex for thread safety
+ *    - Message queue for commands
+ * 3. Configuring visualizer parameters:
+ *    - Map generation constants (squares, sizes, spacing)
+ *    - Message queue for display updates
+ * 4. Establishing inter-component links:
+ *    - Connecting visualizer to control center
+ *    - Setting up control center to visualizer feedback
+ * 5. Launching core threads:
+ *    - Input handling
+ *    - Control processing
+ *    - Visualization
+ *    - Background timing
+ * 6. Managing thread lifecycle:
+ *    - Proper shutdown sequencing
+ *    - Resource cleanup
+ * 
+ * @note Called once at program startup
+ * @warning Log file creation failure terminates program
+ */
 
 void init_operations() {
     log_file = fopen("operation_log.txt", "w");
