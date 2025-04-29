@@ -47,6 +47,7 @@ gcc taxi_simulator.c -o taxi_simulator -lpthread -lncurses
 ./taxi_simulator
 
 📊 Detalhes Técnicos
+
 Threads: Usa pthread para operações concorrentes dos táxis
 
 Pathfinding: Algoritmo BFS para planejamento de rotas e MST para criação de Ruas
@@ -55,3 +56,4 @@ Entrada/Saída: Input não-bloqueante com termios
 
 Visualização: Renderização com emojis
 
+OBS.: Precisa ser inicializado em ambiente LINUX (para uma melhor experiência, execulte o programa em BASH com UTF-8)
